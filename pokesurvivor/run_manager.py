@@ -20,6 +20,8 @@ from pokesurvivor.upgrade_policy import UpgradePolicy
 from pokesurvivor.learning_engine import LearningEngine
 from pokesurvivor.memory_store import MemoryStore
 from pokesurvivor.metrics_reporter import MetricsReporter
+from pokesurvivor.game_state_adapter import GameStateAdapter
+from pokesurvivor.coin_tracker import CoinTracker
 from pokesurvivor.config import HOTKEY_TOGGLE, HOTKEY_EMERGENCY_STOP
 
 class RunManager:
@@ -44,9 +46,11 @@ class RunManager:
         self.policy = self.learning_engine.current_policy
         self.movement_policy = MovementPolicy(self.policy)
         self.upgrade_policy = UpgradePolicy(self.policy)
+        self.coin_tracker = CoinTracker()
 
         self.browser_ctrl: Optional[BrowserController] = None
         self.observer: Optional[GameObserver] = None
+        self.game_state_adapter: Optional[GameStateAdapter] = None
 
         self.is_running = True
         self.is_paused = False
@@ -91,6 +95,7 @@ class RunManager:
         self.browser_ctrl = BrowserController(headless=self.headless)
         self.browser_ctrl.start()
         self.observer = GameObserver(self.browser_ctrl.page)
+        self.game_state_adapter = GameStateAdapter(self.browser_ctrl.page, self.perception)
 
         try:
             self.browser_ctrl.navigate_home()
@@ -120,6 +125,7 @@ class RunManager:
 
             print("\n" + "=" * 60)
             print("🏁 HOÀN TẤT PHIÊN CHẠY (SESSION FINISHED)")
+            print(f"💰 {self.coin_tracker.format_status_line()}")
             print(self.metrics_reporter.generate_comparison_table())
 
         except Exception as e:
@@ -452,6 +458,17 @@ class RunManager:
             dom_results=dom_results
         )
 
+        # Economy & coin farming tracking
+        coins_earned = dom_results.get("coins") if dom_results else None
+        self.coin_tracker.record_run(
+            coins=coins_earned,
+            kills=run_result.get("game_score"),
+            survival_time=run_result.get("survival_time", elapsed),
+            level=run_result.get("max_level"),
+            bosses=dom_results.get("bosses") if dom_results else None,
+            policy_version=self.policy.get("version", "1.0")
+        )
+
         # Learning & adaptation
         analysis = self.learning_engine.evaluate_run(run_result)
         
@@ -504,6 +521,7 @@ class RunManager:
 
         # Print summary
         self.metrics_reporter.print_run_summary(run_result, analysis)
+        print(f"[*] {self.coin_tracker.format_status_line()}")
 
         # 8. Return to menu
         print("[*] Đang trở về Menu để chuẩn bị lượt tiếp theo...")

@@ -2,6 +2,7 @@ import time
 import math
 from typing import Dict, Any, List, Optional, Tuple
 from pokesurvivor.danger_estimator import DIR_KEYS, OPPOSITE_DIR
+from pokesurvivor.target_evaluator import TargetEvaluator
 
 # Compass angle mapping (0 = East, 90 = South, 180 = West, 270 = North)
 DIR_ANGLES = {
@@ -48,6 +49,8 @@ class MovementPolicy:
         self.pos_history: List[Tuple[float, float, float]] = []  # (timestamp, x, y)
         self.pin_escape_until = 0.0
         self.pin_escape_dir: Optional[str] = None
+        # Tactical Target Prioritization (Thief, Spring, Chest, Escort)
+        self.target_evaluator = TargetEvaluator()
 
     def update_config(self, policy_config: Dict[str, Any]):
         self.config = policy_config.get("movement", {})
@@ -322,10 +325,11 @@ class MovementPolicy:
                 else:
                     mob_sparsity_score = -self.mob_penalty_weight * mobs_in_sec
 
+                repel_mult = 2.0 if is_low_hp else 1.0
                 if is_encircled:
-                    score = (mob_sparsity_score * 2.5) + (alignment_score * 1.5) - (danger * 0.03) - (obs_cost * 0.04)
+                    score = (mob_sparsity_score * 2.5) + (alignment_score * 1.5 * repel_mult) - (danger * 0.03) - (obs_cost * 0.04)
                 else:
-                    score = (alignment_score * 2.2) + mob_sparsity_score - (danger * 0.04) - (obs_cost * 0.03) + mom_bonus
+                    score = (alignment_score * 2.2 * repel_mult) + mob_sparsity_score - (danger * 0.04) - (obs_cost * 0.03) + mom_bonus
 
                 if score > best_escape_score:
                     best_escape_score = score
@@ -371,6 +375,16 @@ class MovementPolicy:
 
             self._set_dir(boss_dir, now)
             return boss_dir, DIR_KEYS[boss_dir], self.step_duration
+
+        # ------------------------------------------------------------------
+        # 4b. TACTICAL CANDIDATE NAVIGATION (Thieves, Springs, Chests, Shrines)
+        # ------------------------------------------------------------------
+        tactical_target = self.target_evaluator.evaluate_targets(vision_state, now=now)
+        if tactical_target and danger_level in ("LOW", "MEDIUM") and min_enemy_dist > 140.0:
+            t_sec = tactical_target.get("sector")
+            if t_sec and is_passable(t_sec) and sector_dangers.get(t_sec, 0.0) < 800.0:
+                self._set_dir(t_sec, now)
+                return t_sec, DIR_KEYS[t_sec], self.step_duration
 
         # ------------------------------------------------------------------
         # 5. TACTICAL SWARM KITING & EXP VACUUMING (Enemies within 135-260px)

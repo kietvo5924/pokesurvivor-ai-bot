@@ -3,6 +3,7 @@ import os
 from typing import Optional, Set
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 from pokesurvivor.config import GAME_URL, STORAGE_STATE_PATH, VIEWPORT_WIDTH, VIEWPORT_HEIGHT
+from pokesurvivor.game_state_adapter import CANVAS_HOOK_SCRIPT
 
 class BrowserController:
     def __init__(self, headless: bool = False):
@@ -31,6 +32,8 @@ class BrowserController:
             context_opts["storage_state"] = STORAGE_STATE_PATH
 
         self.context = self.browser.new_context(**context_opts)
+        # Inject Canvas hook & window.G setter at document_start
+        self.context.add_init_script(CANVAS_HOOK_SCRIPT)
         self.page = self.context.new_page()
 
     def stop(self):

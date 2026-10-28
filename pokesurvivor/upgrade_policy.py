@@ -75,10 +75,37 @@ class UpgradePolicy:
         self.primary_move_max_level = self.config.get("primary_move_max_level", 5)
         self.skill_ratings: Dict[str, float] = self.config.get("skill_ratings", {})
 
+        # Item Tier list from verified game mechanics (BoundlessEgret / PokeSurvivorTool)
+        # Note: Choice Band locks weapon slot and breaks multi-weapon E-cycling, so it is strictly avoided!
+        self.item_scores: Dict[str, float] = {
+            "shell bell": 110.0,
+            "shell-bell": 110.0,
+            "leftovers": 100.0,
+            "quick claw": 90.0,
+            "quick-claw": 90.0,
+            "focus sash": 80.0,
+            "focus-sash": 80.0,
+            "focus band": 75.0,
+            "focus-band": 75.0,
+            "assault vest": 70.0,
+            "assault-vest": 70.0,
+            "rocky helmet": 60.0,
+            "rocky-helmet": 60.0,
+            "lucky egg": 50.0,
+            "lucky-egg": 50.0,
+            "amulet coin": 40.0,
+            "amulet-coin": 40.0,
+            "choice scarf": 30.0,
+            "choice-scarf": 30.0,
+            "charcoal": 20.0,
+            "mystic water": 20.0,
+            "life orb": 10.0,
+            "choice band": -100.0, # Breaks multi-slot firing
+            "choice-band": -100.0
+        }
         self.item_priority = [
-            "leftovers", "shell-bell", "focus-band", # S-Tier Survival
-            "charcoal", "choice-specs", "choice-band", "muscle-band", # S-Tier Damage
-            "amulet-coin", "exp-share", "lucky-egg" # S-Tier Economy
+            "shell bell", "leftovers", "quick claw", "focus sash", "assault vest",
+            "rocky helmet", "lucky egg", "amulet coin", "choice scarf"
         ]
 
     def choose_card(
@@ -115,40 +142,38 @@ class UpgradePolicy:
         return self._choose_standard_upgrade(choices, current_hp_ratio)
 
     def _choose_item(self, choices: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Manages the 1 single item slot in PokéSurvivor."""
-        # Typically choices[0] is Keep, choices[1] is Switch To
+        """Manages the 1 single item slot in PokéSurvivor based on survival tier list."""
         if len(choices) == 1:
             return choices[0]
 
         keep_card = choices[0]
         switch_card = choices[1]
-        new_item_name = switch_card.get("name", "").lower()
+        new_name = switch_card.get("name", "").lower().strip()
+        held_name = (self.held_item or keep_card.get("name", "")).lower().strip()
 
-        # If we have no item yet, ALWAYS take the new item!
-        if not self.held_item:
-            self.held_item = new_item_name
-            switch_card["selection_score"] = 500.0
-            switch_card["selection_reason"] = f"EQUIP_FIRST_ITEM: {new_item_name}"
-            return switch_card
+        # Score function helper
+        def get_item_score(item_name: str) -> float:
+            clean = item_name.replace("-", " ").strip()
+            for key, val in self.item_scores.items():
+                if key.replace("-", " ") in clean:
+                    return val
+            return 20.0  # default baseline for unknown items
 
-        # Compare tier of new item vs current item
-        new_rank = 99
-        held_rank = 99
-        for idx, item_id in enumerate(self.item_priority):
-            if item_id in new_item_name:
-                new_rank = idx
-            if item_id in self.held_item.lower():
-                held_rank = idx
+        new_score = get_item_score(new_name)
+        held_score = get_item_score(held_name) if self.held_item else -999.0
 
-        # Lower rank index = higher tier
-        if new_rank < held_rank:
-            self.held_item = new_item_name
-            switch_card["selection_score"] = 400.0
-            switch_card["selection_reason"] = f"UPGRADE_ITEM_TO_TIER_{new_rank+1}: {new_item_name}"
+        # Choice Band must ALWAYS be dropped immediately
+        if "choice band" in held_name:
+            held_score = -999.0
+
+        if new_score > held_score:
+            self.held_item = new_name
+            switch_card["selection_score"] = 500.0 + new_score
+            switch_card["selection_reason"] = f"EQUIP_SUPERIOR_ITEM({new_name}, score={new_score:.0f})"
             return switch_card
         else:
-            keep_card["selection_score"] = 350.0
-            keep_card["selection_reason"] = f"KEEP_SUPERIOR_ITEM: {self.held_item}"
+            keep_card["selection_score"] = 400.0 + held_score
+            keep_card["selection_reason"] = f"KEEP_SUPERIOR_ITEM({held_name}, score={held_score:.0f})"
             return keep_card
 
     def _choose_bond(self, choices: List[Dict[str, Any]], current_skills: List[str] = None) -> Dict[str, Any]:
@@ -168,7 +193,7 @@ class UpgradePolicy:
 
             # Rule: Pair primary attack with a buff move
             if len(self.bonded_groups) == 0:
-                if is_pri_attack or "ember" in name or "fire" in name:
+                if is_pri_attack or "ember" in name or "fire" in name or "water" in name:
                     score += 300.0
                     reasons.append("BOND_CORE_ATTACK")
             elif len(self.bonded_groups) == 1 and is_buff:
@@ -188,22 +213,38 @@ class UpgradePolicy:
         return best_card
 
     def _choose_chest(self, choices: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Selects best chest reward: Rare Candy > Evolution Upgrade > Tickets."""
+        """
+        Selects best chest reward (Adapted from PokeSurvivorTool):
+        1. Upgrade for an owned build move (score: +900)
+        2. Rare Candy (instant level-up pick, score: +700)
+        3. General Evolution / Move Upgrade (score: +500)
+        4. Gacha Tickets (score: +150)
+        """
         scored = []
         for card in choices:
-            name = card.get("name", "").lower()
-            desc = (card.get("desc") or card.get("description") or "").lower()
+            name = card.get("name", "").lower().strip()
+            desc = (card.get("desc") or card.get("description") or "").lower().strip()
             score = 100.0
             reason = "chest_reward"
 
-            if "candy" in name or "rare" in name:
-                score = 450.0
+            # Check if this card upgrades an owned move
+            owned_match = None
+            for m in self.acquired_moves.keys():
+                if m in name or m in desc:
+                    owned_match = m
+                    break
+
+            if owned_match:
+                score = 900.0
+                reason = f"UPGRADE_BUILD_MOVE_{owned_match.upper()}"
+            elif "candy" in name or "rare" in name:
+                score = 700.0
                 reason = "RARE_CANDY_INSTANT_LEVEL"
             elif "evolution" in name or "gold" in name:
-                score = 400.0
+                score = 500.0
                 reason = "EVOLUTION_UPGRADE"
             elif "ticket" in name:
-                score = 300.0
+                score = 150.0
                 reason = "GACHA_TICKETS_REWARD"
             else:
                 score = 250.0
