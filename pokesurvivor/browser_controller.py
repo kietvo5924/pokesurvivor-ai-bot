@@ -68,7 +68,7 @@ class BrowserController:
         # If username input exists, we are not logged in
         return self.page.query_selector('input[name="username"]') is None
 
-    def start_solo_game(self) -> bool:
+    def start_solo_game(self, on_solo_screen_callback=None) -> bool:
         """Navigates from menu to Solo and starts the match."""
         if not self.page:
             return False
@@ -86,6 +86,13 @@ class BrowserController:
                 if cell:
                     cell.click()
                     time.sleep(0.4)
+
+            # Callback while on solo screen (e.g. detect partner info)
+            if on_solo_screen_callback:
+                try:
+                    on_solo_screen_callback()
+                except Exception:
+                    pass
 
             # 3. Wait for and click Play [solo-start] button
             self.page.wait_for_selector('[data-testid="solo-start"]', state="visible", timeout=10000)

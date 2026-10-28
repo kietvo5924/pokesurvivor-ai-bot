@@ -12,11 +12,31 @@ class UpgradePolicy:
     - Chests: Prioritizes Rare Candy (+1 level) > Meta Upgrades > Gacha Tickets.
     """
     def __init__(self, policy_config: Dict[str, Any]):
+        self.active_pokemon: str = "Tapu Fini"
+        self.dex: int = 788
         self.update_config(policy_config)
         self.reset_match()
 
+    def set_active_pokemon(self, name: str, starting_move: str = "", dex: Optional[int] = 0):
+        """Dynamically adapts upgrade prioritization to the active Pokemon and its starter move."""
+        if name:
+            self.active_pokemon = name
+        if dex is not None and dex > 0:
+            self.dex = dex
+        if starting_move:
+            self.rush_primary_move = starting_move.lower().strip()
+            self.acquired_moves[self.rush_primary_move] = 1
+        elif "fini" in self.active_pokemon.lower():
+            self.rush_primary_move = "water gun"
+            self.acquired_moves["water gun"] = 1
+        elif "scorbunny" in self.active_pokemon.lower():
+            self.rush_primary_move = "ember"
+            self.acquired_moves["ember"] = 1
+
     def reset_match(self):
         self.acquired_moves: Dict[str, int] = {}
+        if self.rush_primary_move:
+            self.acquired_moves[self.rush_primary_move] = 1
         self.acquired_stats: List[str] = []
         self.held_item: Optional[str] = None
         self.bonded_groups: List[str] = []
@@ -152,7 +172,7 @@ class UpgradePolicy:
         scored = []
         for card in choices:
             name = card.get("name", "").lower()
-            desc = card.get("desc", "").lower()
+            desc = (card.get("desc") or card.get("description") or "").lower()
             score = 100.0
             reason = "chest_reward"
 
@@ -177,33 +197,32 @@ class UpgradePolicy:
         best_card["selection_reason"] = best_reason
         return best_card
 
-    def _choose_standard_upgrade(self, choices: List[Dict[str, Any]], current_hp_ratio: float = 1.0) -> Dict[str, Any]:
+    def _choose_standard_upgrade(self, choices: List[Dict[str, Any]], current_hp_ratio: Optional[float] = 1.0) -> Dict[str, Any]:
         """
-        PokéSurvivor Official Reverse-Engineered Evolution Meta Picker:
-        1. Golden Evolution Cards (Fire Blast, Overheat, Sacred Fire, Take Down) -> +2000 (INSTANT PICK)
-        2. Emergency Sitrus Berry if HP < 45% -> +1200 (Saves match)
-        3. Rush Starter Ember to Level 5 -> +1000 until Lv.5
-        4. Evolution Prerequisite Stat: 'Power' (attack) for Fire Blast -> +950
-        5. Secondary Attack & Prerequisite:
-           - Flamethrower & Reflexes (cooldown) -> Overheat
-           - Fire Spin & Synthesis (regen) -> Sacred Fire
-           - Tackle & Vigor (max-hp) -> Take Down
-        6. Essential Passive Survival: Sprint (+Speed), Magnet (+XP range), Learning (+XP)
+        PokéSurvivor Dynamic Starter & Evolution Meta Picker:
+        1. Golden Evolution Cards (Scald, Blizzard, Fire Blast, Overheat, Sacred Fire, Take Down) -> +2000
+        2. Emergency Sitrus Berry if HP < 50% -> +1500 (Saves match)
+        3. Core Buffs: Aqua Ring (+1250 for Tapu Fini passive regen), Swords Dance, Agility
+        4. Rush Starter Move (Water Gun / Ember) to Level 5 -> +1050
+        5. Evolution Prerequisite Stat: 'Power' (attack) for Scald/Fire Blast -> +950
+        6. Synergy Combos (Ice Beam + Power, Shadow Ball + Reflexes, Flamethrower + Reflexes)
+        7. Essential Passives: Magnet (+XP Range), Learning (+XP), Sprint (+Speed)
         """
         scored_cards: List[Tuple[Dict[str, Any], float, str]] = []
 
-        ember_lvl = self.acquired_moves.get("ember", 1)
         has_power = "power" in self.acquired_stats
         has_reflexes = "reflexes" in self.acquired_stats
         has_synthesis = "synthesis" in self.acquired_stats
         has_vigor = "vigor" in self.acquired_stats
+
+        is_damaged = (current_hp_ratio is not None and current_hp_ratio < 0.50)
 
         for card in choices:
             score = 10.0
             reasons = []
             name = card.get("name", "").strip().lower()
             tag = card.get("tag", "").strip().lower()
-            desc = card.get("desc", "").strip().lower()
+            desc = (card.get("desc") or card.get("description") or "").strip().lower()
 
             # 1. GOLDEN EVOLUTION CARDS (Supreme priority - clears entire screens!)
             is_evo = (
@@ -218,11 +237,25 @@ class UpgradePolicy:
                 reasons.append("GOLDEN_EVOLUTION_MAX_PRIORITY")
 
             # 2. EMERGENCY HP RECOVERY
-            elif current_hp_ratio < 0.45 and ("sitrus berry" in name or "berry" in name or "heal" in desc):
-                score += 1200.0
-                reasons.append("EMERGENCY_HEAL_45%_HP")
+            elif is_damaged and ("sitrus berry" in name or "berry" in name or "heal" in desc or "recovery" in desc):
+                score += 1500.0
+                reasons.append("EMERGENCY_HEAL_LOW_HP")
 
-            # 3. RUSH PRIMARY ATTACK MOVES TO LEVEL 5
+            # 3. CORE BUFF MOVES (Aqua Ring provides 1.6 HP/s up to 6.4 HP/s passive heal!)
+            elif "aqua ring" in name:
+                score += 1250.0
+                reasons.append("AQUA_RING_PASSIVE_REGEN_CORE_BUFF")
+
+            # 4. RUSH ACTIVE STARTER ATTACK TO LEVEL 5
+            elif self.rush_primary_move and self.rush_primary_move in name:
+                cur_lvl = self.acquired_moves.get(self.rush_primary_move, 1)
+                if cur_lvl < 5:
+                    score += 1050.0
+                    reasons.append(f"RUSH_{self.rush_primary_move.upper()}_TO_LV5(cur={cur_lvl})")
+                else:
+                    score += 80.0
+                    reasons.append(f"{self.rush_primary_move}_already_max_lv5")
+
             elif "water gun" in name:
                 wg_lvl = self.acquired_moves.get("water gun", 1)
                 if wg_lvl < 5:
@@ -264,7 +297,7 @@ class UpgradePolicy:
                     score += 80.0
                     reasons.append("shadow_ball_already_max_lv5")
 
-            # 4. EVOLUTION PREREQUISITE STAT CARD: POWER (Attack - Evolves Water Gun -> Scald, Ember -> Fire Blast, Ice Beam -> Blizzard)
+            # 5. EVOLUTION PREREQUISITE STAT CARD: POWER (Attack - Evolves Water Gun -> Scald, Ember -> Fire Blast)
             elif "power" in name:
                 if not has_power:
                     score += 950.0

@@ -131,9 +131,19 @@ class RunManager:
 
     def _run_single_match(self, run_index: int) -> bool:
         """Executes a single game match from start to game-over."""
-        # 1. Start solo game
+        def on_solo_ready():
+            partner = self.observer.get_selected_partner()
+            if partner:
+                p_name = partner.get("name", "Tapu Fini")
+                p_move = partner.get("starting_move", "Water Gun")
+                p_dex = partner.get("dex", 788)
+                print(f"[*] 🎯 Nhận diện Pokémon xuất trận: No. {p_dex} {p_name} | Chiêu đầu: '{p_move}'")
+                self.upgrade_policy.set_active_pokemon(p_name, starting_move=p_move, dex=p_dex)
+                self.state_tracker.set_active_pokemon(p_name)
+                self.perception.set_active_pokemon(p_name)
+
         print("[*] Đang vào trận Solo...")
-        if not self.browser_ctrl.start_solo_game():
+        if not self.browser_ctrl.start_solo_game(on_solo_screen_callback=on_solo_ready):
             print("[!] Không thể bấm bắt đầu Solo. Kiểm tra lại giao diện.")
             return False
 
@@ -195,6 +205,7 @@ class RunManager:
         last_status_log_time = 0.0
         last_dodge_log_time = 0.0
         last_buffer_log_time = 0.0
+        last_overlay_time = 0.0
         vision_state = None
 
         while self.is_running and not self.emergency_stopped:
@@ -246,7 +257,11 @@ class RunManager:
                             key = best_card.get("key", "1")
                             if key:
                                 self.browser_ctrl.press_key(key)
-                        self.state_tracker.record_upgrade(best_card)
+                        self.state_tracker.record_upgrade(
+                            best_card,
+                            modal_kind=modal_kind,
+                            verified_level=dom_state.get("verifiedLevel")
+                        )
 
                         # Actively wait until the choice modal is completely closed to prevent duplicate processing
                         modal_wait_start = time.time()
@@ -327,10 +342,16 @@ class RunManager:
                 elif now_t - last_status_log_time > 4.0:
                     n_enemies = vision_state.get("enemies_count", 0)
                     n_hazards = len(hazards)
-                    hp_r = vision_state.get("hp_ratio", 1.0)
+                    hp_r = vision_state.get("hp_ratio")
+                    hp_str = f"{hp_r*100:.0f}% ({vision_state.get('hp_status', 'UNKNOWN')})" if hp_r is not None else "UNKNOWN"
                     dist_str = f"{min_e_dist:.0f}px ({e_sec})" if min_e_dist < 9000 else "Không có quái gần"
-                    print(f"[{elapsed:.1f}s] 🏃 Kiting: Hướng {dir_name} | Quái gần nhất: {dist_str} | Quái quanh vùng: {n_enemies} | Đạn: {n_hazards} | HP: {hp_r*100:.0f}%")
+                    print(f"[{elapsed:.1f}s] 🏃 Kiting: Hướng {dir_name} | Quái gần nhất: {dist_str} | Quái quanh vùng: {n_enemies} | Đạn: {n_hazards} | HP: {hp_str}")
                     last_status_log_time = now_t
+
+                # Periodically render and save annotated debug visual overlay
+                if frame is not None and (now_t - last_overlay_time > 4.0 or (hazards and hazards[0].get("is_imminent", False))):
+                    self.perception.create_debug_overlay(frame, vision_state, chosen_dir=dir_name)
+                    last_overlay_time = now_t
 
                 # Update held keys if direction changed
                 if target_keys != active_keys:

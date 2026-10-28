@@ -1,7 +1,19 @@
 import copy
 import time
+import sys
 from typing import Dict, Any, List, Optional
 from pokesurvivor.memory_store import MemoryStore
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 class LearningEngine:
     def __init__(self, memory_store: MemoryStore):
@@ -67,9 +79,13 @@ class LearningEngine:
         elif damage_events > 2:
             death_cause = "ATTRITION_DAMAGE"
             death_summary = f"Mất máu tích lũy qua thời gian kiting ({damage_events} lần trúng đòn)"
+        elif run_data.get("end_reason") == "timeout":
+            death_cause = "TIMEOUT"
+            death_summary = f"Hết thời gian tối đa ván ({duration:.1f}s)"
         else:
-            death_cause = "EARLY_MISTAKE" if duration < 40 else "SURVIVAL_LIMIT"
-            death_summary = f"Kết thúc tự nhiên tại mốc {duration:.1f}s (Level {level})"
+            # Honest telemetry: never assume cause without conclusive data
+            death_cause = "unknown"
+            death_summary = f"Không đủ dữ liệu xác định nguyên nhân chết tại mốc {duration:.1f}s (Level {level})"
 
         print("\n" + "=" * 60)
         print("🧠 BẮT ĐẦU CHU KỲ HỌC MÁY & TỐI ƯU HÓA CHÍNH SÁCH (RL ENGINE)")
@@ -79,8 +95,8 @@ class LearningEngine:
         print(f"   - Va chạm quái cự ly gần / vòng vây : {swarm_damage_count} lần (Tỷ lệ vây: {encircle_rate*100:.1f}%)")
         print(f"   - Va chạm góc cụt / vách đá        : {wall_damage_count} lần")
         print(f"   - Đòn đánh từ chiêu thức / đạn nguy : {hazard_damage_count} lần")
+        print(f"   - Kết luận nguyên nhân kết thúc    : {death_cause} ({death_summary})")
         print("⚙️ Đang tính toán Gradient thích nghi & Cập nhật tham số...")
-        time.sleep(2.5)  # Realistic Machine Learning compute time requested by user
 
         adapted_policy = copy.deepcopy(self.current_policy)
         mov = adapted_policy.setdefault("movement", {})
@@ -168,29 +184,61 @@ class LearningEngine:
         if learned_skill_logs:
             print(f"  ⭐ Xếp hạng chiêu thức: {', '.join(learned_skill_logs)}")
 
-        # Policy Versioning
+        # --- 4. MULTI-MATCH EVALUATION BLOCK & STATISTICAL ROLLBACK ---
+        eval_block = self.learning_state.setdefault("eval_block_runs", [])
+        eval_block.append(duration)
         current_v = float(self.learning_state.get("current_policy_version", "5.0"))
-        new_v = round(current_v + 0.1, 1)
-        adapted_policy["version"] = str(new_v)
-        self.learning_state["current_policy_version"] = str(new_v)
+        
+        is_rollback = False
+        is_promoted = False
 
-        if is_new_best:
-            self.best_policy = copy.deepcopy(adapted_policy)
-            self.learning_state["best_policy_version"] = str(new_v)
+        if len(eval_block) >= 3:
+            block_avg = sum(eval_block) / float(len(eval_block))
+            best_eval_avg = self.learning_state.get("best_eval_avg", 0.0)
+
+            if best_eval_avg <= 0.0:
+                self.learning_state["best_eval_avg"] = block_avg
+                best_eval_avg = block_avg
+
+            print(f"\n📊 ĐÁNH GIÁ KHỐI 3 TRẬN: Thời gian sống sót TB = {block_avg:.1f}s (Baseline chuẩn: {best_eval_avg:.1f}s)")
+
+            # Check for regression (> 15% drop compared to best baseline)
+            if block_avg < best_eval_avg * 0.85 and best_eval_avg > 60.0:
+                print(f"⚠️ [ROLLBACK] Chính sách mới làm giảm thời gian sống ({block_avg:.1f}s < {best_eval_avg:.1f}s). TỰ ĐỘNG ROLLBACK VỀ BEST POLICY!")
+                adapted_policy = copy.deepcopy(self.best_policy)
+                is_rollback = True
+            elif block_avg > best_eval_avg * 1.05:
+                # Verified statistical improvement across the 3-run block
+                new_v = round(current_v + 0.1, 1)
+                adapted_policy["version"] = str(new_v)
+                self.learning_state["current_policy_version"] = str(new_v)
+                self.learning_state["best_policy_version"] = str(new_v)
+                self.learning_state["best_eval_avg"] = block_avg
+                self.best_policy = copy.deepcopy(adapted_policy)
+                self.memory.save_best_policy(self.best_policy, score)
+                is_promoted = True
+                print(f"🏆 [THĂNG CẤP] Khối 3 trận đạt TB {block_avg:.1f}s (+{(block_avg-best_eval_avg):.1f}s)! Chính thức thăng cấp chính sách lên v{new_v}!")
+
+            # Reset evaluation block for next cycle
+            self.learning_state["eval_block_runs"] = []
+        else:
+            print(f"📈 Khối đánh giá: Đã thu thập {len(eval_block)}/3 trận của chính sách v{current_v}.")
+
+        if is_new_best and not is_rollback:
             self.learning_state["best_survival_time"] = max(best_duration, duration)
             self.learning_state["best_level"] = max(self.learning_state.get("best_level", 1), level)
-            self.memory.save_best_policy(self.best_policy, score)
-            print(f"🏆 KỶ LỤC MỚI: v{new_v} (Thời gian: {duration:.1f}s, Level {level}) -> Đã lưu thành Chính sách xuất sắc nhất!")
 
         self.current_policy = adapted_policy
         self.memory.save_policy(self.current_policy)
         self.memory.save_learning_state(self.learning_state)
-        print(f"💾 Hoàn tất chu kỳ học máy! Đã lưu chính sách v{new_v} cho ván tiếp theo.")
+        print(f"💾 Đã cập nhật chính sách cho ván tiếp theo (v{self.current_policy.get('version', '5.0')}).")
         print("=" * 60 + "\n")
 
         analysis = {
             "score": round(score, 2),
             "is_new_best": is_new_best,
+            "is_rollback": is_rollback,
+            "is_promoted": is_promoted,
             "previous_best_score": round(best_score, 2),
             "previous_best_duration": round(best_duration, 1),
             "total_runs": total_runs,

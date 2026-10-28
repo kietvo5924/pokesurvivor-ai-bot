@@ -10,6 +10,15 @@ class PerceptionEngine:
         self.center = (frame_width // 2, frame_height // 2)
         self.prev_gray: Optional[np.ndarray] = None
         self.history_frames: List[np.ndarray] = []
+        self.prev_hazards: List[Dict[str, Any]] = []
+        self.prev_hazard_time: float = 0.0
+        self.active_pokemon: str = "Tapu Fini"
+        self.last_hp_result: Dict[str, Any] = {"hp_ratio": 1.0, "status": "UNKNOWN", "box": None}
+
+    def set_active_pokemon(self, name: str):
+        """Sets active partner Pokemon for visual context and overlay."""
+        if name:
+            self.active_pokemon = name
 
     def analyze_frame(self, frame: np.ndarray, is_moving: bool = True) -> Dict[str, Any]:
         """Performs computer vision perception on the gameplay frame."""
@@ -23,10 +32,15 @@ class PerceptionEngine:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # 1. Exact Dynamic Player Localization
+        # 1. Exact Dynamic Player Localization (Pokemon-neutral contrast centroid)
         center_x, center_y = self._locate_player(frame, hsv)
         player_pos = (center_x, center_y)
-        hp_ratio = self._detect_hp_ratio(hsv, center_x, center_y)
+
+        # 1b. Verified Top-Left HUD HP Detection
+        hp_info = self._detect_hp_ratio(frame)
+        hp_ratio = hp_info.get("hp_ratio")
+        hp_status = hp_info.get("status", "UNKNOWN")
+        hp_box = hp_info.get("box")
 
         # 2. EXP Gems Detection
         gems, gem_cluster_sector = self._detect_gems(hsv, center_x, center_y)
@@ -34,10 +48,11 @@ class PerceptionEngine:
         # 3. Entities & Items Detection
         enemies, items_on_ground = self._detect_entities(hsv, center_x, center_y)
 
-        # 4. Confirmed Hazards & Projectiles (filtered against player center, enemy bodies, and ground flora)
-        hazards = self._detect_hazards_and_projectiles(hsv, center_x, center_y, enemies)
+        # 4. Confirmed Hazards & Multi-Frame Trajectory Tracking
+        raw_hazards = self._detect_hazards_and_projectiles(hsv, center_x, center_y, enemies)
+        hazards = self._track_hazards(raw_hazards, center_x, center_y)
 
-        # 4. Nearest enemy & Swarm Center
+        # 5. Nearest enemy & Swarm Center
         min_enemy_dist = 9999.0
         nearest_enemy_sector = None
         nearest_enemy = None
@@ -70,38 +85,43 @@ class PerceptionEngine:
         encirclement_sectors = {e["sector"] for e in nearby_threats if e.get("sector")}
         is_encircled = len(nearby_threats) >= 7 and len(encirclement_sectors) >= 4
 
-        # 5. Obstacle Probing (Rocks, Cliffs, Water, Trees in 8 directions with multi-distance raycasts)
+        # 6. Obstacle Probing (Rocks, Cliffs, Water, Trees in 8 directions with multi-distance raycasts)
         obstacle_mask = self._detect_obstacle_mask(hsv, center_x, center_y)
         sector_obstacles, sector_obs_costs = self._probe_sector_obstacles(obstacle_mask, center_x, center_y)
 
-        # 6. Sector Danger Profiling (incorporates enemies, hazards, and terrain obstacles)
+        # 7. Sector Danger Profiling (incorporates enemies, hazards with TTC, and terrain obstacles)
         sector_dangers = self._compute_sector_dangers(enemies, hazards, center_x, center_y, sector_obstacles, sector_obs_costs)
 
-        # 7. EXP Direction
+        # 8. EXP Direction
         best_gem_dir = self._find_nearest_gem_vector(gems, center_x, center_y)
 
-        # 8. Stuck / Collision Detection (strictly checked only when keys are held AND an obstacle is nearby)
+        # 9. Stuck / Collision Detection (strictly checked only when keys are held AND an obstacle is nearby)
         is_stuck = self._check_if_stuck(gray, center_x, center_y, is_moving, sector_obstacles)
 
-        # 9. Purple Rift Portal & Arrow Indicator Detection
+        # 10. Purple Rift Portal & Arrow Indicator Detection
         rift_target = self._detect_purple_rift(hsv, center_x, center_y)
 
-        # 10. Boss Presence Detection (Top HP Bar + Large Boss Sprite)
+        # 11. Boss Presence Detection (Top HP Bar + Large Boss Sprite)
         boss_info = self._detect_boss(hsv, enemies, center_x, center_y)
 
-        # Determine overall danger level based on distance and bullets
-        if min_enemy_dist < 120 or len(hazards) > 0 or is_stuck:
+        # Determine overall danger level based on distance, imminent bullets, and stuck state
+        has_imminent_hazard = any(h.get("is_imminent", False) or h.get("ttc", 99.0) < 0.9 for h in hazards)
+        if min_enemy_dist < 120 or has_imminent_hazard or is_stuck:
             danger_level = "CRITICAL"
-        elif min_enemy_dist < 200 or len(enemies) > 6:
+        elif min_enemy_dist < 200 or len(hazards) > 0 or len(enemies) > 6:
             danger_level = "HIGH"
         elif min_enemy_dist < 280 or len(enemies) > 2:
             danger_level = "MEDIUM"
         else:
             danger_level = "LOW"
 
+        confidence = 0.92 if hp_status == "VERIFIED" else 0.75
+
         return {
             "player_pos": player_pos,
             "hp_ratio": hp_ratio,
+            "hp_status": hp_status,
+            "hp_box": hp_box,
             "enemies_count": len(enemies),
             "hazards_count": len(hazards),
             "gems_count": len(gems),
@@ -124,42 +144,54 @@ class PerceptionEngine:
             "is_stuck": is_stuck,
             "rift_target": rift_target,
             "boss_info": boss_info,
-            "confidence": 0.90
+            "confidence": confidence
         }
 
     def _locate_player(self, frame: np.ndarray, hsv: np.ndarray) -> Tuple[int, int]:
         """
-        Dynamically locates Scorbunny's exact center coordinates in the viewport.
-        Uses white body contour + orange ear/foot markers within +-140px of screen center.
-        Takes <0.3ms and prevents coordinate drift from camera margins or aspect-ratio letterboxing.
+        Dynamically locates player center coordinates in viewport.
+        Pokemon-neutral: Accurately tracks Tapu Fini, Scorbunny, or any partner without assuming orange/white colors.
+        Uses foreground sprite contrast against grass/dirt terrain within +-65px of viewport center.
+        Falls back to (mid_x, mid_y) when centered or ambiguous.
         """
         h, w = frame.shape[:2]
         mid_x, mid_y = w // 2, h // 2
-        y1, y2 = max(0, mid_y - 140), min(h, mid_y + 140)
-        x1, x2 = max(0, mid_x - 140), min(w, mid_x + 140)
+        y1, y2 = max(0, mid_y - 65), min(h, mid_y + 65)
+        x1, x2 = max(0, mid_x - 65), min(w, mid_x + 65)
         crop = frame[y1:y2, x1:x2]
         crop_hsv = hsv[y1:y2, x1:x2]
 
-        white_mask = (crop[:, :, 0] > 230) & (crop[:, :, 1] > 230) & (crop[:, :, 2] > 230)
-        orange_mask = cv2.inRange(crop_hsv, np.array([5, 140, 160]), np.array([16, 255, 255]))
-        player_mask = cv2.bitwise_or(white_mask.astype(np.uint8) * 255, orange_mask)
+        # Background grass/dirt masks in crop
+        mask_grass = cv2.inRange(crop_hsv, np.array([52, 112, 50]), np.array([68, 220, 190]))
+        mask_dirt = cv2.inRange(crop_hsv, np.array([14, 40, 50]), np.array([32, 160, 190]))
+        bg = cv2.bitwise_or(mask_grass, mask_dirt)
+        fg = cv2.bitwise_not(bg)
 
-        contours, _ = cv2.findContours(player_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        best_c = None
-        max_area = 0
+        # Exclude borders of crop
+        fg[0:3, :] = 0
+        fg[-3:, :] = 0
+        fg[:, 0:3] = 0
+        fg[:, -3:] = 0
+
+        contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best_pt = None
+        min_c_dist = 999.0
+        crop_cx, crop_cy = (x2 - x1) // 2, (y2 - y1) // 2
+
         for c in contours:
             area = cv2.contourArea(c)
-            if 30 < area < 2000:
-                if area > max_area:
-                    max_area = area
-                    best_c = c
+            if 80 < area < 2500:
+                M = cv2.moments(c)
+                if M["m00"] > 0:
+                    px = int(M["m10"] / M["m00"])
+                    py = int(M["m01"] / M["m00"])
+                    dist = math.hypot(px - crop_cx, py - crop_cy)
+                    if dist < 45.0 and dist < min_c_dist:
+                        min_c_dist = dist
+                        best_pt = (px, py)
 
-        if best_c is not None:
-            M = cv2.moments(best_c)
-            if M["m00"] > 0:
-                px = x1 + int(M["m10"] / M["m00"])
-                py = y1 + int(M["m01"] / M["m00"])
-                return px, py
+        if best_pt is not None:
+            return x1 + best_pt[0], y1 + best_pt[1]
 
         return mid_x, mid_y
 
@@ -335,31 +367,84 @@ class PerceptionEngine:
 
         return self.stuck_frames >= 5
 
-    def _detect_hp_ratio(self, hsv: np.ndarray, cx: int, cy: int) -> float:
-        """Looks for the HP bar above the player's head."""
-        # Search a box around cx - 40 to cx + 40, cy - 60 to cy - 20
-        y1, y2 = max(0, cy - 60), max(0, cy - 20)
-        x1, x2 = max(0, cx - 40), min(hsv.shape[1], cx + 40)
-        crop = hsv[y1:y2, x1:x2]
-        if crop.size == 0:
-            return 1.0
+    def _detect_hp_ratio(self, frame: np.ndarray) -> Dict[str, Any]:
+        """
+        Detects player HP ratio from the top-left HUD bar (x: 30..300, y: 15..55).
+        Returns:
+            {
+                "hp_ratio": float (0.0 to 1.0) or None,
+                "status": "VERIFIED" | "ESTIMATED" | "UNKNOWN",
+                "active_width": int,
+                "total_width": int,
+                "box": (x, y, w, h) or None
+            }
+        Never defaults to 100% when HP is unknown or unreadable.
+        """
+        if frame is None or frame.size == 0:
+            res = {"hp_ratio": None, "status": "UNKNOWN", "active_width": 0, "total_width": 0, "box": None}
+            self.last_hp_result = res
+            return res
 
-        # Green mask
-        lower_green = np.array([35, 100, 100])
-        upper_green = np.array([85, 255, 255])
-        mask_green = cv2.inRange(crop, lower_green, upper_green)
-        green_pixels = cv2.countNonZero(mask_green)
+        h, w = frame.shape[:2]
+        hud_crop = frame[15:min(h, 55), 30:min(w, 300)]
+        if hud_crop.size == 0:
+            res = {"hp_ratio": None, "status": "UNKNOWN", "active_width": 0, "total_width": 0, "box": None}
+            self.last_hp_result = res
+            return res
 
-        # Red mask (low hp / damage)
-        lower_red1 = np.array([0, 120, 100])
-        upper_red1 = np.array([10, 255, 255])
-        mask_red1 = cv2.inRange(crop, lower_red1, upper_red1)
-        red_pixels = cv2.countNonZero(mask_red1)
+        r = hud_crop[:, :, 2].astype(float)
+        g = hud_crop[:, :, 1].astype(float)
+        b = hud_crop[:, :, 0].astype(float)
 
-        total = green_pixels + red_pixels
-        if total > 15:
-            return float(green_pixels) / float(total)
-        return 1.0
+        # 1. Active HP Fill: Bright coral/pink (R > 175, R - G > 80, R - B > 50)
+        active_hp = (r > 175) & ((r - g) > 80) & ((r - b) > 50)
+
+        # 2. Damaged/Empty HP Bar Background: Dark reddish-brown (35 < R < 130, G < 60, B < 60)
+        empty_hp = (r > 35) & (r < 130) & (g < 60) & (b < 60)
+
+        # Combined full HP container track
+        hp_track = active_hp | empty_hp
+
+        cnts_track, _ = cv2.findContours((hp_track * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cnts_active, _ = cv2.findContours((active_hp * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        active_w = 0
+        active_box = None
+        for c in cnts_active:
+            bx, by, bw, bh = cv2.boundingRect(c)
+            if bw > 15 and 4 <= bh <= 20:
+                if bw > active_w:
+                    active_w = bw
+                    active_box = (bx + 30, by + 15, bw, bh)
+
+        total_w = active_w
+        track_box = None
+        for c in cnts_track:
+            bx, by, bw, bh = cv2.boundingRect(c)
+            if bw >= active_w and 4 <= bh <= 20:
+                if bw > total_w:
+                    total_w = bw
+                    track_box = (bx + 30, by + 15, bw, bh)
+
+        if active_w == 0 and total_w == 0:
+            res = {"hp_ratio": None, "status": "UNKNOWN", "active_width": 0, "total_width": 0, "box": None}
+            self.last_hp_result = res
+            return res
+
+        # Standard full HP bar width in PokeSurvivor is ~140px to 168px
+        max_len = max(active_w, total_w, 140)
+        ratio = min(1.0, max(0.0, float(active_w) / float(max_len)))
+        status = "VERIFIED" if (active_w > 0 and total_w > 0) else "ESTIMATED"
+
+        res = {
+            "hp_ratio": round(ratio, 3),
+            "status": status,
+            "active_width": active_w,
+            "total_width": max_len,
+            "box": active_box or track_box
+        }
+        self.last_hp_result = res
+        return res
 
     def _detect_gems(self, hsv: np.ndarray, cx: int, cy: int) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """
@@ -514,6 +599,79 @@ class PerceptionEngine:
         hazards.sort(key=lambda h: h["dist"])
         return hazards
 
+    def _track_hazards(self, current_hazards: List[Dict[str, Any]], cx: int, cy: int) -> List[Dict[str, Any]]:
+        """
+        Multi-frame hazard tracking:
+        Estimates velocity vector (vx, vy), relative speed, Time-To-Collision (TTC),
+        and Distance of Closest Approach (DCA) towards player across frames.
+        """
+        import time
+        now = time.time()
+        dt = now - self.prev_hazard_time if self.prev_hazard_time > 0 else 0.05
+        dt = max(0.01, min(0.35, dt))
+
+        tracked = []
+        for h in current_hazards:
+            hx, hy = h["x"], h["y"]
+            vx, vy = 0.0, 0.0
+
+            # Match with previous hazard by proximity
+            best_prev = None
+            min_match_dist = 999.0
+            for prev in self.prev_hazards:
+                d = math.hypot(hx - prev["x"], hy - prev["y"])
+                if d < 65.0 and d < min_match_dist:
+                    min_match_dist = d
+                    best_prev = prev
+
+            if best_prev is not None and dt > 0:
+                vx = (hx - best_prev["x"]) / dt
+                vy = (hy - best_prev["y"]) / dt
+            elif h.get("type") == "poison_bullet":
+                to_px = cx - hx
+                to_py = cy - hy
+                norm = math.hypot(to_px, to_py)
+                if norm > 0:
+                    vx = (to_px / norm) * 140.0
+                    vy = (to_py / norm) * 140.0
+
+            speed = math.hypot(vx, vy)
+            rx = cx - hx
+            ry = cy - hy
+            dist = math.hypot(rx, ry)
+            dot = vx * rx + vy * ry
+
+            ttc = 99.0
+            dca = dist
+            is_imminent = False
+
+            if speed > 20.0 and dot > 0:
+                ttc = dot / (speed * speed)
+                dca_x = rx - vx * ttc
+                dca_y = ry - vy * ttc
+                dca = math.hypot(dca_x, dca_y)
+                if dca < 45.0 and 0.0 < ttc < 1.2:
+                    is_imminent = True
+            elif h.get("type") == "telegraph":
+                if dist < 65.0:
+                    ttc = 0.4
+                    dca = dist
+                    is_imminent = True
+
+            h_tracked = dict(h)
+            h_tracked["vx"] = round(vx, 1)
+            h_tracked["vy"] = round(vy, 1)
+            h_tracked["speed"] = round(speed, 1)
+            h_tracked["ttc"] = round(ttc, 2)
+            h_tracked["dca"] = round(dca, 1)
+            h_tracked["is_imminent"] = is_imminent
+            tracked.append(h_tracked)
+
+        self.prev_hazards = current_hazards
+        self.prev_hazard_time = now
+        tracked.sort(key=lambda item: (not item["is_imminent"], item["ttc"], item["dist"]))
+        return tracked
+
     def _detect_entities(self, hsv: np.ndarray, cx: int, cy: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Segment entities (monsters, chests, items) by background subtraction:
@@ -594,7 +752,7 @@ class PerceptionEngine:
         sector_obstacles: Optional[Dict[str, bool]] = None,
         sector_obs_costs: Optional[Dict[str, float]] = None
     ) -> Dict[str, float]:
-        """Calculates danger rating for 8 compass directions including terrain obstacles and open field bias."""
+        """Calculates danger rating for 8 compass directions including terrain obstacles, mob density, and bullet TTC."""
         sectors = {
             "N": 0.0, "NE": 0.0, "E": 0.0, "SE": 0.0,
             "S": 0.0, "SW": 0.0, "W": 0.0, "NW": 0.0
@@ -609,31 +767,29 @@ class PerceptionEngine:
         if sector_obstacles:
             for sec, is_blocked in sector_obstacles.items():
                 if is_blocked:
-                    sectors[sec] += 8000.0 # absolute impassable wall
+                    sectors[sec] += 9000.0  # absolute impassable wall
 
-        # 3. Open field steering bias (Shady Forest: water/cliffs are in NW/W; wide open plains in E/SE)
-        field_bias = {"E": -5.0, "SE": -8.0, "NE": -3.0, "S": -2.0, "N": 2.0, "NW": 6.0, "W": 5.0, "SW": 2.0}
-        for sec, bias in field_bias.items():
-            sectors[sec] = max(0.0, sectors[sec] + bias)
-
-        # 4. Enemies danger: closer = much higher danger (1 / dist)
+        # 3. Enemies danger: closer = quadratically higher danger
         for e in enemies:
             dx = e["x"] - cx
             dy = e["y"] - cy
-            dist = max(10.0, e["dist"])
-            angle = math.degrees(math.atan2(dy, dx))  # -180 to 180
+            dist = max(10.0, e.get("dist", math.hypot(dx, dy)))
+            angle = math.degrees(math.atan2(dy, dx))
             sector = self._angle_to_sector(angle)
-            weight = 150000.0 / (dist * dist + 100.0)
+            weight = 160000.0 / (dist * dist + 100.0)
             sectors[sector] += weight
 
-        # 5. Hazards danger (bullets/red zones)
+        # 4. Hazards danger (bullets/warning zones with trajectory awareness)
         for h in hazards:
             dx = h["x"] - cx
             dy = h["y"] - cy
             dist = max(10.0, math.hypot(dx, dy))
             angle = math.degrees(math.atan2(dy, dx))
             sector = self._angle_to_sector(angle)
-            weight = 450000.0 / (dist * dist + 100.0)
+
+            # Imminent bullets approaching player receive massive priority weight
+            imminent_mult = 3.5 if h.get("is_imminent", False) else (2.0 if h.get("ttc", 99.0) < 1.0 else 1.0)
+            weight = (500000.0 / (dist * dist + 80.0)) * imminent_mult
             sectors[sector] += weight
 
         return sectors
@@ -758,7 +914,9 @@ class PerceptionEngine:
     def _empty_perception(self) -> Dict[str, Any]:
         return {
             "player_pos": self.center,
-            "hp_ratio": 1.0,
+            "hp_ratio": None,
+            "hp_status": "UNKNOWN",
+            "hp_box": None,
             "enemies_count": 0,
             "hazards_count": 0,
             "gems_count": 0,
@@ -769,4 +927,115 @@ class PerceptionEngine:
             "best_gem_vector": None,
             "confidence": 0.0
         }
+
+    def create_debug_overlay(
+        self,
+        frame: np.ndarray,
+        vision_state: Dict[str, Any],
+        chosen_dir: Optional[str] = None,
+        output_path: str = "debug_artifacts/overlay_latest.png"
+    ) -> np.ndarray:
+        """
+        Creates an annotated visual frame with:
+        - Player position & centroid marker
+        - Top-left HUD HP detection box and verified/estimated ratio
+        - Enemy contours & distances
+        - Hazard/bullet bounding rings, velocity trajectory vectors, and TTC
+        - Directional arrow for chosen movement escape vector
+        - Telemetry and status dashboard
+        """
+        if frame is None or frame.size == 0:
+            return np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        overlay = frame.copy()
+        h, w = overlay.shape[:2]
+        cx, cy = vision_state.get("player_pos", (w // 2, h // 2))
+
+        # 1. Player Marker
+        cv2.circle(overlay, (cx, cy), 28, (0, 255, 255), 2)
+        cv2.circle(overlay, (cx, cy), 4, (0, 255, 255), -1)
+        cv2.putText(overlay, f"PLAYER ({cx},{cy})", (cx - 45, cy - 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 255), 1, cv2.LINE_AA)
+
+        # 2. HP HUD Bar Bounding Box
+        hp_info = self.last_hp_result
+        if hp_info and hp_info.get("box"):
+            bx, by, bw, bh = hp_info["box"]
+            color = (0, 255, 0) if hp_info.get("status") == "VERIFIED" else (0, 165, 255)
+            cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), color, 2)
+            ratio_val = hp_info.get("hp_ratio")
+            r_str = f"{ratio_val*100:.0f}%" if ratio_val is not None else "N/A"
+            cv2.putText(overlay, f"HP: {r_str} [{hp_info.get('status', 'UNKNOWN')}]",
+                        (bx, max(12, by - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+
+        # 3. Enemies with Distance Tags
+        for e in vision_state.get("enemies", [])[:18]:
+            ex, ey = int(e["x"]), int(e["y"])
+            edist = e.get("dist", 0.0)
+            cv2.circle(overlay, (ex, ey), 16, (0, 140, 255), 2)
+            if edist < 220:
+                cv2.putText(overlay, f"{edist:.0f}px", (ex - 16, ey - 18),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 140, 255), 1, cv2.LINE_AA)
+
+        # 4. Hazards & Bullets with Trajectory Arrows and TTC
+        for hz in vision_state.get("hazards", []):
+            hx, hy = int(hz["x"]), int(hz["y"])
+            vx, vy = hz.get("vx", 0.0), hz.get("vy", 0.0)
+            ttc = hz.get("ttc", 99.0)
+            is_imm = hz.get("is_imminent", False)
+            hz_color = (0, 0, 255) if is_imm else (255, 0, 255)
+            cv2.circle(overlay, (hx, hy), 14, hz_color, 2)
+            if is_imm:
+                cv2.circle(overlay, (hx, hy), 22, (0, 0, 255), 1)
+
+            # Arrow indicating hazard movement velocity
+            if abs(vx) > 5 or abs(vy) > 5:
+                cv2.arrowedLine(overlay, (hx, hy), (int(hx + vx * 0.35), int(hy + vy * 0.35)),
+                                hz_color, 2, tipLength=0.3)
+            if ttc < 5.0:
+                cv2.putText(overlay, f"TTC:{ttc:.1f}s", (hx - 22, hy - 16),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, hz_color, 1, cv2.LINE_AA)
+
+        # 5. Chosen Movement Direction Arrow
+        if chosen_dir:
+            dir_angles = {
+                "E": 0, "SE": 45, "S": 90, "SW": 135,
+                "W": 180, "NW": 225, "N": 270, "NE": 315
+            }
+            deg = dir_angles.get(chosen_dir, 0)
+            rad = math.radians(deg)
+            arrow_len = 65
+            ax = int(cx + arrow_len * math.cos(rad))
+            ay = int(cy + arrow_len * math.sin(rad))
+            cv2.arrowedLine(overlay, (cx, cy), (ax, ay), (0, 255, 0), 3, tipLength=0.25)
+            cv2.putText(overlay, f"MOVE: {chosen_dir}", (ax + 10, ay + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
+
+        # 6. Telemetry HUD Dashboard Overlay
+        hp_r = vision_state.get("hp_ratio")
+        hp_display = f"{hp_r*100:.0f}%" if hp_r is not None else "UNKNOWN"
+        status_lines = [
+            f"PARTNER : {getattr(self, 'active_pokemon', 'Unknown')}",
+            f"DANGER  : {vision_state.get('danger_level', 'LOW')}",
+            f"HP      : {hp_display} ({vision_state.get('hp_status', 'UNKNOWN')})",
+            f"ENEMIES : {vision_state.get('enemies_count', 0)} | HAZARDS: {vision_state.get('hazards_count', 0)}",
+            f"ENCIRCLE: {vision_state.get('is_encircled', False)} | STUCK: {vision_state.get('is_stuck', False)}",
+            f"CONFID. : {vision_state.get('confidence', 0.85)*100:.0f}%"
+        ]
+
+        box_top = max(0, h - 145)
+        cv2.rectangle(overlay, (10, box_top), (340, h - 10), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (10, box_top), (340, h - 10), (0, 255, 255), 1)
+        for i, line in enumerate(status_lines):
+            cv2.putText(overlay, line, (18, box_top + 20 + i * 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+
+        try:
+            import os
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            cv2.imwrite(output_path, overlay)
+        except Exception:
+            pass
+
+        return overlay
 

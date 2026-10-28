@@ -9,21 +9,17 @@ DIR_ANGLES = {
     "W": 180, "NW": 225, "N": 270, "NE": 315
 }
 
-# Lateral (orthogonal/tangential) steering options that preserve forward sprint momentum
-# and strictly prevent dead-stop 180-degree twitch reversals back into trailing mobs.
+# Lateral steering options to preserve momentum without full 180 dead-stops
 LATERAL_SLIDES = {
     "E": ["SE", "NE", "S"],
     "SE": ["E", "S", "NE"],
     "S": ["SE", "SW", "E"],
-    "SW": ["S", "SE", "E"],
-    "W": ["SE", "S", "E"],    # Turn away from western lake towards open eastern plains
-    "NW": ["NE", "E", "SE"],  # Turn away from NW cliffs
-    "N": ["NE", "E", "SE"],
-    "NE": ["E", "SE", "N"]
+    "SW": ["S", "SE", "W"],
+    "W": ["SW", "NW", "S"],
+    "NW": ["W", "N", "SW"],
+    "N": ["NW", "NE", "E"],
+    "NE": ["N", "E", "SE"]
 }
-
-# Preferred wide-field cruise directions in Shady Forest (vast open plains with wide turning room)
-OPEN_FIELD_PRIORITY = ["E", "NE", "N", "SE", "S"]
 
 def angle_diff(a1: float, a2: float) -> float:
     """Calculates minimal angular difference between two angles in degrees (0 to 180)."""
@@ -101,23 +97,30 @@ class MovementPolicy:
         back_ang = (curr_ang + 180) % 360
         sector_enemy_counts = vision_state.get("sector_enemy_counts", {})
         is_encircled = vision_state.get("is_encircled", False)
+        hp_ratio = vision_state.get("hp_ratio")
+        hp_status = vision_state.get("hp_status", "UNKNOWN")
+        is_low_hp = (hp_ratio is not None and hp_ratio < 0.50)
+        effective_danger_thresh = self.danger_threshold + (25.0 if is_low_hp else 0.0)
 
         def score_cand(s: str) -> float:
             score = sector_dangers.get(s, 0.0)
             mobs = sector_enemy_counts.get(s, 0)
-            # Parametric candidate scoring from learned policy weights
             score += mobs * self.mob_penalty_weight
             if mobs == 0:
                 score -= self.mob_clear_corridor_bonus
-            if s in OPEN_FIELD_PRIORITY:
-                score -= 40.0
-            # Heavily penalize diving backwards into our own pursuit tail!
-            if angle_diff(DIR_ANGLES.get(s, 0), back_ang) < 50.0:
+            # Dynamic open field clearance bonus: reward sectors whose adjacent sectors are also open
+            deg = DIR_ANGLES.get(s, 0)
+            n1 = self._angle_to_sector((deg - 45 + 360) % 360)
+            n2 = self._angle_to_sector((deg + 45) % 360)
+            if not sector_obstacles.get(n1, False) and not sector_obstacles.get(n2, False):
+                score -= 60.0  # broad open escape corridor
+            # Penalize diving backwards into our own pursuit tail
+            if angle_diff(deg, back_ang) < 45.0:
                 score += 800.0
             return score
 
-        def pick_safest_open_direction(fallback: str = "SE") -> str:
-            # 1. Look for passable + low danger directions favoring open grassland without diving backwards
+        def pick_safest_open_direction(fallback: str = "E") -> str:
+            # 1. Look for passable + low danger directions with wide open clearance
             candidates = [s for s, blocked in sector_obstacles.items() if not blocked and is_completely_safe(s)]
             if candidates:
                 candidates.sort(key=score_cand)
@@ -134,10 +137,10 @@ class MovementPolicy:
 
         # ------------------------------------------------------------------
         # ANTI-OSCILLATION DIRECTION COMMITMENT
-        # Prevents rapid micro-reversals / vibrating in place ("cứ đi qua lại liên tục")
+        # Prevents rapid micro-reversals while permitting immediate breakout on hazard
         # ------------------------------------------------------------------
         is_curr_blocked = sector_obstacles.get(self.current_dir, False)
-        has_immed_hazard = any(h.get("dist", 999.0) < 85.0 and h.get("sector") == self.current_dir for h in hazards)
+        has_immed_hazard = any((h.get("is_imminent", False) or h.get("ttc", 99.0) < 0.7 or h.get("dist", 999.0) < 85.0) and h.get("sector") == self.current_dir for h in hazards)
         if now < self.dir_lock_until and not is_curr_blocked and not has_immed_hazard:
             return self.current_dir, DIR_KEYS[self.current_dir], max(0.10, self.dir_lock_until - now)
 
@@ -147,7 +150,7 @@ class MovementPolicy:
         if is_stuck or (now - self.stuck_eject_time < 0.5):
             if is_stuck:
                 self.stuck_eject_time = now
-            eject_dir = pick_safest_open_direction("SE")
+            eject_dir = pick_safest_open_direction("E")
             self._set_dir(eject_dir, now)
             self.dir_lock_until = now + self.wall_breakout_thrust
             return eject_dir, DIR_KEYS[eject_dir], self.wall_breakout_thrust
@@ -159,7 +162,7 @@ class MovementPolicy:
         # hoặc là đường đó gần sát quái chưa đụng hẳn vô quái) để thoát ra chứ nó cứ đâm vô tường"
         # ------------------------------------------------------------------
         blocked_secs = [s for s, b in sector_obstacles.items() if b]
-        is_wall_pinned = len(blocked_secs) >= 1 and (min_enemy_dist < (self.danger_threshold + 15.0) or is_encircled)
+        is_wall_pinned = len(blocked_secs) >= 1 and (min_enemy_dist < (effective_danger_thresh + 15.0) or is_encircled)
 
         if is_wall_pinned:
             # Outward escape vector pointing AWAY from all blocked terrain walls
@@ -179,21 +182,20 @@ class MovementPolicy:
                 if sector_obstacles.get(sec, False):
                     continue
                 diff = angle_diff(ang, wall_escape_angle)
-                if diff > 120.0:
+                if diff > 130.0:
                     continue
                 align_score = 180.0 - diff
 
                 mobs = sector_enemy_counts.get(sec, 0)
                 # Lao đầu vô hướng quái ít nhất để mở đường thoát
                 if mobs == 0:
-                    mob_score = self.mob_clear_corridor_bonus * 1.3
+                    mob_score = self.mob_clear_corridor_bonus * 1.4
                 elif mobs <= 2:
                     mob_score = (self.mob_clear_corridor_bonus * 0.5) - (mobs * self.mob_penalty_weight * 0.4)
                 else:
                     mob_score = -self.mob_penalty_weight * mobs
 
-                open_bonus = 40.0 if sec in OPEN_FIELD_PRIORITY else 0.0
-                score = (align_score * 2.2) + mob_score + open_bonus
+                score = (align_score * 2.2) + mob_score
 
                 if score > best_wall_score:
                     best_wall_score = score
@@ -205,57 +207,35 @@ class MovementPolicy:
                     unblocked.sort(key=lambda s: (sector_enemy_counts.get(s, 0), sector_dangers.get(s, 0.0)))
                     best_wall_escape = unblocked[0]
                 else:
-                    best_wall_escape = pick_safest_open_direction("SE")
+                    best_wall_escape = pick_safest_open_direction("E")
 
             self.dir_lock_until = now + self.wall_breakout_thrust
             self._set_dir(best_wall_escape, now)
             return best_wall_escape, DIR_KEYS[best_wall_escape], self.wall_breakout_thrust
 
         # ------------------------------------------------------------------
-        # 2. BULLET & ATTACK TELEGRAPH DODGING (Hazards < 160px)
+        # 2. MULTI-HAZARD & BULLET TRAJECTORY DODGING (TTC & DCA Informed)
         # ------------------------------------------------------------------
         if hazards:
-            closest_hz = hazards[0]
-            hz_dist = closest_hz.get("dist", 999.0)
-            if hz_dist < (165.0 * self.evasion_weight):
-                hx = closest_hz.get("x", cx)
-                hy = closest_hz.get("y", cy)
-                hz_angle = closest_hz.get("angle", 0.0)
-
-                if hz_dist < 80.0:
-                    away_angle = math.degrees(math.atan2(cy - hy, cx - hx))
-                    cand_dirs = [
-                        self._angle_to_sector(away_angle),
-                        self._angle_to_sector((away_angle + 45) % 360),
-                        self._angle_to_sector((away_angle - 45 + 360) % 360)
-                    ]
-                else:
-                    cand_dirs = [
-                        self._angle_to_sector((hz_angle + 90) % 360),
-                        self._angle_to_sector((hz_angle - 90 + 360) % 360)
-                    ]
-
-                safe_dodges = [s for s in cand_dirs if not sector_obstacles.get(s, False)]
-                if safe_dodges:
-                    safe_dodges.sort(key=lambda s: (sector_enemy_counts.get(s, 0), sector_dangers.get(s, 0.0)))
-                    dodge_dir = safe_dodges[0]
-                else:
-                    dodge_dir = pick_safest_open_direction("SE")
-
-                self.dir_lock_until = now + self.dodge_hold_duration
+            dodge_eval = self._evaluate_multi_hazard_evasion(
+                hazards, cx, cy, sector_obstacles, sector_enemy_counts, sector_dangers
+            )
+            if dodge_eval is not None:
+                dodge_dir, hold_t = dodge_eval
+                self.dir_lock_until = now + hold_t
                 self._set_dir(dodge_dir, now)
-                return dodge_dir, DIR_KEYS[dodge_dir], self.dodge_hold_duration
+                return dodge_dir, DIR_KEYS[dodge_dir], hold_t
 
         # ------------------------------------------------------------------
-        # 3. PROACTIVE DISTANCE REPULSION & ANTI-ENCIRCLEMENT BREAKOUT (enemies < danger_threshold or encircled)
+        # 3. PROACTIVE DISTANCE REPULSION & ANTI-ENCIRCLEMENT BREAKOUT (enemies < effective_danger_thresh or encircled)
         # ------------------------------------------------------------------
-        if min_enemy_dist < self.danger_threshold or is_encircled:
+        if min_enemy_dist < effective_danger_thresh or is_encircled:
             repel_vx = 0.0
             repel_vy = 0.0
             nearby_count = 0
             for e in vision_state.get("enemies", []):
                 edist = e.get("dist", 999.0)
-                if edist < (self.danger_threshold + 65.0):
+                if edist < (effective_danger_thresh + 65.0):
                     weight = 1.0 / max(15.0, edist)
                     repel_vx += (cx - e["x"]) * weight
                     repel_vy += (cy - e["y"]) * weight
@@ -266,14 +246,14 @@ class MovementPolicy:
                 repel_angle = (e_ang + 180) % 360
             elif abs(repel_vx) < 1e-5 and abs(repel_vy) < 1e-5:
                 min_sec_count = 999
-                min_count_sec = "SE"
-                for sec in OPEN_FIELD_PRIORITY + list(DIR_ANGLES.keys()):
+                min_count_sec = "E"
+                for sec in list(DIR_ANGLES.keys()):
                     if is_passable(sec):
                         cnt = sector_enemy_counts.get(sec, 0)
                         if cnt < min_sec_count:
                             min_sec_count = cnt
                             min_count_sec = sec
-                repel_angle = float(DIR_ANGLES.get(min_count_sec, 45))
+                repel_angle = float(DIR_ANGLES.get(min_count_sec, 0))
             else:
                 repel_angle = math.degrees(math.atan2(repel_vy, repel_vx))
 
@@ -291,7 +271,6 @@ class MovementPolicy:
 
                 danger = sector_dangers.get(sec, 0.0)
                 obs_cost = sector_obs_costs.get(sec, 0.0) * self.wall_avoidance_weight
-                open_bonus = 35.0 if sec in OPEN_FIELD_PRIORITY else 0.0
                 mom_bonus = 15.0 if sec == self.current_dir else (-25.0 if angle_diff(ang, back_ang) < 35.0 else 0.0)
 
                 mobs_in_sec = sector_enemy_counts.get(sec, 0)
@@ -303,16 +282,16 @@ class MovementPolicy:
                     mob_sparsity_score = -self.mob_penalty_weight * mobs_in_sec
 
                 if is_encircled:
-                    score = (mob_sparsity_score * 2.5) + (alignment_score * 1.5) - (danger * 0.03) - (obs_cost * 0.04) + open_bonus
+                    score = (mob_sparsity_score * 2.5) + (alignment_score * 1.5) - (danger * 0.03) - (obs_cost * 0.04)
                 else:
-                    score = (alignment_score * 2.2) + mob_sparsity_score - (danger * 0.04) - (obs_cost * 0.03) + open_bonus + mom_bonus
+                    score = (alignment_score * 2.2) + mob_sparsity_score - (danger * 0.04) - (obs_cost * 0.03) + mom_bonus
 
                 if score > best_escape_score:
                     best_escape_score = score
                     best_escape_dir = sec
 
             if not best_escape_dir:
-                best_escape_dir = pick_safest_open_direction("SE")
+                best_escape_dir = pick_safest_open_direction("E")
 
             step_time = 0.32 if is_encircled else self.step_duration
             self.dir_lock_until = now + step_time
@@ -428,38 +407,97 @@ class MovementPolicy:
             return kite_dir, DIR_KEYS[kite_dir], self.step_duration
 
         # ------------------------------------------------------------------
-        # 6. EXP GEMS & CHESTS HARVESTING (When safe and unblocked)
+        # 6. EXP GEMS & CHESTS HARVESTING (Strictly gated by health and safety)
+        # Never dive into mobs for gems if low HP (< 50%) or if danger is elevated!
         # ------------------------------------------------------------------
-        target_gem = gem_cluster_sec or gem_sector
-        if target_gem and is_passable(target_gem) and sector_dangers.get(target_gem, 0.0) < 1800.0:
-            self._set_dir(target_gem, now)
-            return target_gem, DIR_KEYS[target_gem], self.step_duration
+        if not is_low_hp and danger_level == "LOW":
+            target_gem = gem_cluster_sec or gem_sector
+            if target_gem and is_passable(target_gem) and sector_dangers.get(target_gem, 0.0) < 1400.0:
+                self._set_dir(target_gem, now)
+                return target_gem, DIR_KEYS[target_gem], self.step_duration
 
         # ------------------------------------------------------------------
-        # 7. WIDE-FIELD OPEN GRASSLAND CRUISE (Grand scale linear sweeps)
-        # Navigates the vast eastern plains; turns away from western lakes early.
+        # 7. DYNAMIC OPEN ARENA CRUISE (Smooth sweeps without hardcoded direction bias)
+        # Evaluates open field clearance, obstacles, and mob absence dynamically.
         # ------------------------------------------------------------------
-        # If currently heading West/Northwest towards the lake, turn back towards East / Southeast open grasslands!
-        if self.current_dir in ("W", "NW") and (now - self.last_change_time > 0.8):
-            candidate = "SE" if is_completely_safe("SE") else "E"
-            if is_passable(candidate):
-                self._set_dir(candidate, now)
-                return candidate, DIR_KEYS[candidate], self.step_duration
-
         current_safe = is_completely_safe(self.current_dir)
 
         if not current_safe or (now - self.last_change_time > self.cruise_hold_duration):
-            if not current_safe:
-                new_cruise = pick_safest_open_direction("SE")
-            else:
-                self.cruise_dir_index = (self.cruise_dir_index + 1) % len(OPEN_FIELD_PRIORITY)
-                candidate = OPEN_FIELD_PRIORITY[self.cruise_dir_index]
-                new_cruise = candidate if is_completely_safe(candidate) else pick_safest_open_direction("SE")
-
+            new_cruise = pick_safest_open_direction("E")
             self._set_dir(new_cruise, now)
 
-        dir_to_use = self.current_dir if is_passable(self.current_dir) else pick_safest_open_direction("SE")
+        dir_to_use = self.current_dir if is_passable(self.current_dir) else pick_safest_open_direction("E")
         return dir_to_use, DIR_KEYS[dir_to_use], self.step_duration
+
+    def _evaluate_multi_hazard_evasion(
+        self,
+        hazards: List[Dict[str, Any]],
+        cx: int,
+        cy: int,
+        sector_obstacles: Dict[str, bool],
+        sector_enemy_counts: Dict[str, int],
+        sector_dangers: Dict[str, float]
+    ) -> Optional[Tuple[str, float]]:
+        """
+        Multi-bullet and warning zone trajectory evasion:
+        Evaluates projected positions across ALL hazards within 1.2s TTC.
+        Selects the safest lateral escape sector that minimizes combined bullet risk,
+        avoids terrain walls, and minimizes mob density.
+        """
+        urgent_hazards = [h for h in hazards if h.get("is_imminent") or h.get("ttc", 99.0) < 1.2 or h.get("dist", 999.0) < 130.0]
+        if not urgent_hazards:
+            return None
+
+        v_player_speed = 170.0
+        step_dt = 0.32
+        sector_hazard_risk = {s: 0.0 for s in DIR_ANGLES.keys()}
+
+        for sec, deg in DIR_ANGLES.items():
+            if sector_obstacles.get(sec, False):
+                sector_hazard_risk[sec] += 99999.0
+                continue
+
+            rad = math.radians(deg)
+            px_cand = cx + v_player_speed * math.cos(rad) * step_dt
+            py_cand = cy + v_player_speed * math.sin(rad) * step_dt
+
+            for h in urgent_hazards:
+                hx = h.get("x", cx)
+                hy = h.get("y", cy)
+                vx = h.get("vx", 0.0)
+                vy = h.get("vy", 0.0)
+                ttc = h.get("ttc", 99.0)
+
+                eval_t = min(step_dt, ttc) if ttc > 0.05 else step_dt
+                hx_future = hx + vx * eval_t
+                hy_future = hy + vy * eval_t
+
+                proj_dist = math.hypot(px_cand - hx_future, py_cand - hy_future)
+                if proj_dist < 45.0:
+                    sector_hazard_risk[sec] += 12000.0 / max(10.0, proj_dist)
+                elif proj_dist < 80.0:
+                    sector_hazard_risk[sec] += 4000.0 / max(10.0, proj_dist)
+
+                if h.get("type") == "telegraph":
+                    ground_dist = math.hypot(px_cand - hx, py_cand - hy)
+                    if ground_dist < 65.0:
+                        sector_hazard_risk[sec] += 8000.0
+
+            mobs = sector_enemy_counts.get(sec, 0)
+            sector_hazard_risk[sec] += mobs * self.mob_penalty_weight * 1.2
+            sector_hazard_risk[sec] += sector_dangers.get(sec, 0.0) * 0.02
+
+        valid_sectors = [s for s, risk in sector_hazard_risk.items() if risk < 8000.0]
+        if valid_sectors:
+            valid_sectors.sort(key=lambda s: sector_hazard_risk[s])
+            return valid_sectors[0], self.dodge_hold_duration
+
+        passable = [s for s in DIR_ANGLES.keys() if not sector_obstacles.get(s, False)]
+        if passable:
+            passable.sort(key=lambda s: sector_hazard_risk.get(s, 99999.0))
+            return passable[0], self.dodge_hold_duration
+
+        return None
 
     def _set_dir(self, new_dir: str, now: float):
         if new_dir != self.current_dir:
