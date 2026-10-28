@@ -14,6 +14,15 @@ class StateTracker:
         self.start_time = time.time()
         self.duration = 0.0
         self.current_level = 1
+        self.game_score: Optional[int] = None
+        self.game_score_source: str = "unobserved"
+        self.survival_time: float = 0.0
+        self.survival_time_source: str = "state_tracker_clock"
+        self.max_level: int = 1
+        self.max_level_source: str = "state_tracker_verified"
+        self.fitness_score: float = 0.0
+        self.fitness_score_source: str = "internal_composite_formula"
+        self.match_results: Optional[Dict[str, Any]] = None
         self.upgrades_chosen: List[Dict[str, Any]] = []
         self.hp_history: List[float] = []
         self.damage_events: int = 0
@@ -141,9 +150,40 @@ class StateTracker:
             "time": now_time
         })
 
-    def end_run(self, reason: str = "defeated") -> Dict[str, Any]:
+    def end_run(self, reason: str = "defeated", dom_results: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         self.is_active = False
         self.duration = time.time() - self.start_time
+
+        # Integrate verified DOM end-screen results if captured
+        if dom_results and dom_results.get("available"):
+            self.match_results = dom_results
+            if dom_results.get("kills") is not None:
+                self.game_score = dom_results["kills"]
+                self.game_score_source = "dom_results_kills"
+            else:
+                self.game_score = None
+                self.game_score_source = "dom_results_missing_kills"
+
+            if dom_results.get("time_seconds") is not None:
+                self.survival_time = float(dom_results["time_seconds"])
+                self.survival_time_source = "dom_results_time"
+            else:
+                self.survival_time = round(self.duration, 1)
+                self.survival_time_source = "state_tracker_clock"
+
+            if dom_results.get("level") is not None:
+                self.max_level = int(dom_results["level"])
+                self.max_level_source = "dom_results_level"
+            else:
+                self.max_level = self.current_level
+                self.max_level_source = "state_tracker_verified"
+        else:
+            self.game_score = None
+            self.game_score_source = f"unobserved_{reason}"
+            self.survival_time = round(self.duration, 1)
+            self.survival_time_source = "state_tracker_clock"
+            self.max_level = self.current_level
+            self.max_level_source = "state_tracker_verified"
 
         # Honest termination diagnosis: if telemetry is insufficient, record 'unknown'
         if reason == "defeated":
@@ -160,8 +200,14 @@ class StateTracker:
 
         return {
             "pokemon": self.active_pokemon,
-            "duration": round(self.duration, 1),
-            "max_level": self.current_level,
+            "game_score": self.game_score,
+            "game_score_source": self.game_score_source,
+            "survival_time": self.survival_time,
+            "survival_time_source": self.survival_time_source,
+            "max_level": self.max_level,
+            "max_level_source": self.max_level_source,
+            "duration": self.survival_time,
+            "match_results": self.match_results,
             "upgrades": self.upgrades_chosen,
             "damage_events": self.damage_events,
             "damage_incidents": self.damage_incidents,

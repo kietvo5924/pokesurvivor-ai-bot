@@ -1,5 +1,5 @@
 {
-  "version": "9.9",
+  "version": "10.2",
   "description": "Meta Fire Blast & Rift Boss Hunting Loadout (1 Buff + 3 Attack)",
   "movement": {
     "pattern": "kiting",
@@ -9,11 +9,11 @@
     "danger_threshold": 185.0,
     "enter_rift_priority": true,
     "mob_penalty_weight": 150.0,
-    "mob_clear_corridor_bonus": 520.0,
+    "mob_clear_corridor_bonus": 550.0,
     "wall_avoidance_weight": 2.5,
-    "wall_breakout_thrust": 0.52,
+    "wall_breakout_thrust": 0.55,
     "dodge_hold_duration": 0.45,
-    "dir_commit_duration": 0.38,
+    "dir_commit_duration": 0.4,
     "exp_harvest_weight": 0.65
   },
   "upgrade": {
@@ -51,32 +51,34 @@
     "skill_ratings": {
       "flamethrower": 6.075,
       "ember": 6.759,
-      "power": 18.627,
-      "reflexes": 11.034,
-      "magnet": 16.667,
+      "power": 16.44,
+      "reflexes": 18.024,
+      "magnet": 16.748,
       "revive": 5.633,
       "fire spin": 10.345,
-      "sitrus berry": 12.455,
-      "synthesis": 10.731,
-      "tackle": 18.009,
-      "sprint": 19.597,
+      "sitrus berry": 20.786,
+      "synthesis": 17.901,
+      "tackle": 14.279,
+      "sprint": 20.011,
       "flame wheel": 1.774,
-      "harden": 5.463,
+      "harden": 22.516,
       "swords dance": 13.412,
       "heat wave": 2.891,
       "will-o-wisp": 13.68,
-      "vigor": 15.723,
-      "learning": 17.702,
-      "armor": 13.137,
-      "aqua ring": 13.321,
-      "water gun": 21.178,
+      "vigor": 16.5,
+      "learning": 16.427,
+      "armor": 20.362,
+      "aqua ring": 17.328,
+      "water gun": 24.412,
       "focus": 7.592,
-      "hydro pump": 8.813,
-      "agility": 4.95,
-      "water gun → water gun+": 13.023,
-      "disarming voice": 12.029,
+      "hydro pump": 22.092,
+      "agility": 6.768,
+      "water gun -> water gun+": 25.072,
+      "disarming voice": 21.578,
       "fairy wind": 7.314,
-      "hyper beam": 4.559
+      "hyper beam": 4.559,
+      "hydro pump -> hydro pump+": 12.326,
+      "disarming voice -> disarming voice+": 7.332
     }
   },
   "items": {
@@ -93,5 +95,5 @@
       "lucky-egg"
     ]
   },
-  "best_score": 1357.9
+  "best_score": 1672.3500000000001
 }

@@ -201,3 +201,119 @@ class GameObserver:
                 "error": str(e)
             }
 
+    def read_match_results(self) -> Dict[str, Any]:
+        """
+        Reads genuine game end-of-match statistics from the DOM:
+        - [data-testid="results"] / .ps-results
+        - [data-testid="run-stat-kills"] b (Defeated monsters count)
+        - [data-testid="run-stat-level"] b (Final character level)
+        - [data-testid="run-stat-damage"] b (Total damage dealt)
+        - [data-testid="run-stat-last-hits"] b (Last hits)
+        - [data-testid="run-stat-meters"] b (Meters ran)
+        - [data-testid="run-stat-downs"] b (Times down)
+        - .stats (Round, Time, Level, Defeated, Bosses, PokeCoins, Gems, Tickets)
+        """
+        if not self.page:
+            return {"available": False, "source": "no_page"}
+
+        try:
+            return self.page.evaluate('''() => {
+                const resultsEl = document.querySelector('[data-testid="results"]') || document.querySelector('.ps-results');
+                if (!resultsEl || resultsEl.offsetParent === null) {
+                    return { available: false, source: "no_results_modal" };
+                }
+
+                const titleEl = resultsEl.querySelector('h2');
+                const outcome = titleEl ? titleEl.innerText.trim() : 'Unknown';
+
+                // 1. Try reading directly from data-testid="run-stat-*" elements
+                const killsEl = resultsEl.querySelector('[data-testid="run-stat-kills"] b');
+                const levelEl = resultsEl.querySelector('[data-testid="run-stat-level"] b');
+                const damageEl = resultsEl.querySelector('[data-testid="run-stat-damage"] b');
+                const lastHitsEl = resultsEl.querySelector('[data-testid="run-stat-last-hits"] b');
+                const metersEl = resultsEl.querySelector('[data-testid="run-stat-meters"] b');
+                const downsEl = resultsEl.querySelector('[data-testid="run-stat-downs"] b');
+
+                // 2. Read key-value pairs from .stats div
+                const statRows = Array.from(resultsEl.querySelectorAll('.stats > div'));
+                const statsMap = {};
+                for (let row of statRows) {
+                    const span = row.querySelector('span');
+                    const b = row.querySelector('b');
+                    if (span && b) {
+                        const key = span.innerText.trim().toLowerCase();
+                        statsMap[key] = b.innerText.trim();
+                    }
+                }
+
+                // Parse kills (defeated count)
+                let kills = null;
+                if (killsEl && killsEl.innerText.trim()) {
+                    const parsed = parseInt(killsEl.innerText.replace(/[^0-9]/g, ''));
+                    if (!isNaN(parsed)) kills = parsed;
+                } else if (statsMap['defeated']) {
+                    const parsed = parseInt(statsMap['defeated'].replace(/[^0-9]/g, ''));
+                    if (!isNaN(parsed)) kills = parsed;
+                }
+
+                // Parse level
+                let level = null;
+                if (levelEl && levelEl.innerText.trim()) {
+                    const parsed = parseInt(levelEl.innerText.replace(/[^0-9]/g, ''));
+                    if (!isNaN(parsed)) level = parsed;
+                } else if (statsMap['level']) {
+                    const parsed = parseInt(statsMap['level'].replace(/[^0-9]/g, ''));
+                    if (!isNaN(parsed)) level = parsed;
+                }
+
+                // Parse time
+                let timeSeconds = null;
+                const timeStr = statsMap['time'];
+                if (timeStr) {
+                    const parts = timeStr.split(':');
+                    if (parts.length === 2) {
+                        const mins = parseInt(parts[0]);
+                        const secs = parseInt(parts[1]);
+                        if (!isNaN(mins) && !isNaN(secs)) {
+                            timeSeconds = mins * 60 + secs;
+                        }
+                    } else {
+                        const parsed = parseFloat(timeStr);
+                        if (!isNaN(parsed)) timeSeconds = parsed;
+                    }
+                }
+
+                // Parse coins
+                let coins = null;
+                const coinStr = statsMap['pokécoins earned'] || statsMap['pokecoins earned'];
+                if (coinStr) {
+                    const parsed = parseInt(coinStr.replace(/[^0-9]/g, ''));
+                    if (!isNaN(parsed)) coins = parsed;
+                }
+
+                // Parse bosses
+                let bosses = null;
+                if (statsMap['bosses']) {
+                    const parsed = parseInt(statsMap['bosses'].replace(/[^0-9]/g, ''));
+                    if (!isNaN(parsed)) bosses = parsed;
+                }
+
+                return {
+                    available: true,
+                    source: "dom_results_modal",
+                    outcome,
+                    kills,
+                    level,
+                    time_seconds: timeSeconds,
+                    damage: damageEl ? damageEl.innerText.trim() : null,
+                    last_hits: lastHitsEl ? lastHitsEl.innerText.trim() : null,
+                    meters: metersEl ? metersEl.innerText.trim() : null,
+                    downs: downsEl ? downsEl.innerText.trim() : null,
+                    coins,
+                    bosses,
+                    raw_stats: statsMap
+                };
+            }''')
+        except Exception as e:
+            return {"available": False, "source": f"error: {str(e)}"}
+

@@ -13,6 +13,7 @@ class MemoryStore:
         self.history_file = os.path.join(self.data_dir, "run_history.jsonl")
         self.policy_file = os.path.join(self.data_dir, "policy.json")
         self.best_policy_file = os.path.join(self.data_dir, "best_policy.json")
+        self.candidate_policy_file = os.path.join(self.data_dir, "candidate_policy.json")
         self.state_file = os.path.join(self.data_dir, "learning_state.json")
         self.metrics_file = os.path.join(self.data_dir, "metrics.csv")
         
@@ -42,10 +43,24 @@ class MemoryStore:
             with open(self.metrics_file, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    "run_id", "timestamp", "duration_seconds", "max_level", 
-                    "upgrades_count", "end_reason", "policy_version", 
-                    "movement_pattern", "score", "notes"
+                    "run_id", "timestamp", "pokemon", "game_score", "game_score_source",
+                    "duration_seconds", "survival_time_source", "max_level", "max_level_source",
+                    "fitness_score", "upgrades_count", "end_reason", "policy_version",
+                    "policy_hash", "movement_pattern", "notes"
                 ])
+
+    def load_candidate_policy(self) -> Optional[Dict[str, Any]]:
+        if not os.path.exists(self.candidate_policy_file):
+            return None
+        try:
+            with open(self.candidate_policy_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def save_candidate_policy(self, policy: Dict[str, Any]):
+        with open(self.candidate_policy_file, "w", encoding="utf-8") as f:
+            json.dump(policy, f, indent=2, ensure_ascii=False)
 
     def load_policy(self) -> Dict[str, Any]:
         try:

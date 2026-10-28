@@ -212,6 +212,7 @@ class RunManager:
         last_buffer_log_time = 0.0
         last_overlay_time = 0.0
         vision_state = None
+        dom_results = None
 
         while self.is_running and not self.emergency_stopped:
             loop_start = time.time()
@@ -229,11 +230,19 @@ class RunManager:
 
             # Check match end
             if phase == "ended" or exit_available:
+                print(f"[*] Trận đấu kết thúc! Phase: {phase}")
+                # Wait for results modal to mount (game client uses ~900ms setTimeout before showing results)
+                wait_results_start = time.time()
+                while time.time() - wait_results_start < 2.5:
+                    dom_results = self.observer.read_match_results()
+                    if dom_results and dom_results.get("available"):
+                        break
+                    time.sleep(0.25)
+
                 try:
                     self.browser_ctrl.page.screenshot(path="debug_artifacts/last_match_end.png")
                 except Exception:
                     pass
-                print(f"[*] Trận đấu kết thúc! Phase: {phase}")
                 break
 
             # 4. Handle Modals: Level Up, Rift Boss Bond/Fusion, Item Swap, or Chest
@@ -376,6 +385,10 @@ class RunManager:
         # 7. Match Cleanup & Learning
         self.browser_ctrl.release_all_keys()
 
+        # If not yet captured, try reading DOM match results once more
+        if not dom_results or not dom_results.get("available"):
+            dom_results = self.observer.read_match_results()
+
         # If ended via timeout while still running, cleanly open pause to exit
         if not exit_available and phase != "ended":
             try:
@@ -387,36 +400,57 @@ class RunManager:
                 pass
 
         run_result = self.state_tracker.end_run(
-            reason="timeout" if elapsed > self.max_duration_per_run else "defeated"
+            reason="timeout" if elapsed > self.max_duration_per_run else "defeated",
+            dom_results=dom_results
         )
 
         # Learning & adaptation
         analysis = self.learning_engine.evaluate_run(run_result)
         
+        # Synchronize active policies
+        self.policy = self.learning_engine.current_policy
+        self.movement_policy.update_config(self.policy)
+        self.upgrade_policy.update_config(self.policy)
+
         # Save history & metrics
         run_record = {
             "run_id": analysis.get("total_runs", run_index),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "duration": run_result["duration"],
+            "pokemon": run_result.get("pokemon", "Unknown"),
+            "game_score": run_result.get("game_score"),
+            "game_score_source": run_result.get("game_score_source"),
+            "duration": run_result["survival_time"],
+            "survival_time": run_result["survival_time"],
+            "survival_time_source": run_result.get("survival_time_source"),
             "max_level": run_result["max_level"],
+            "max_level_source": run_result.get("max_level_source"),
             "damage_events": run_result["damage_events"],
             "upgrades": run_result["upgrades"],
             "end_reason": run_result["end_reason"],
-            "score": analysis["score"],
-            "policy_version": self.policy.get("version", "1.0"),
+            "score": analysis["fitness_score"],
+            "fitness_score": analysis["fitness_score"],
+            "fitness_score_source": analysis.get("fitness_score_source", "internal_composite_formula"),
+            "policy_version": analysis.get("policy_version", self.policy.get("version", "1.0")),
+            "policy_hash": analysis.get("policy_hash", ""),
             "movement_pattern": self.movement_policy.pattern
         }
         self.memory_store.append_run_history(run_record)
         self.memory_store.append_metrics([
             run_record["run_id"],
             run_record["timestamp"],
+            run_record["pokemon"],
+            run_record["game_score"],
+            run_record["game_score_source"],
             run_record["duration"],
+            run_record["survival_time_source"],
             run_record["max_level"],
+            run_record["max_level_source"],
+            run_record["fitness_score"],
             len(run_record["upgrades"]),
             run_record["end_reason"],
             run_record["policy_version"],
+            run_record["policy_hash"],
             run_record["movement_pattern"],
-            run_record["score"],
             "; ".join(analysis.get("adaptations", []))
         ])
 

@@ -1,66 +1,361 @@
 {
-  "total_runs": 98,
-  "current_policy_version": "9.9",
-  "best_policy_version": "9.9",
-  "best_survival_time": 323.8,
-  "best_level": 24,
+  "total_runs": 121,
+  "current_policy_version": "10.2",
+  "best_policy_version": "10.2",
+  "best_survival_time": 390.6,
+  "best_level": 36,
   "recent_scores": [
-    5.0,
-    404.3,
-    564.15,
-    475.8,
-    517.4,
-    553.8,
-    333.5,
-    502.15,
-    719.0,
-    299.5,
-    726.65,
-    954.5,
-    1140.4,
-    77.35,
-    1380.45,
-    804.45,
-    706.75,
-    1357.9,
-    1867.8,
-    1192.0
+    2494.1,
+    966.25,
+    1492.9,
+    1672.35,
+    1030.85,
+    741.7,
+    895.75,
+    620.3,
+    1370.65,
+    536.5,
+    814.9,
+    269.15,
+    393.05,
+    853.0,
+    1498.5,
+    833.5,
+    1746.65,
+    1245.0,
+    869.0,
+    625.0
   ],
   "consecutive_drops": 0,
   "skill_ratings": {
     "flamethrower": 6.075,
     "ember": 6.759,
-    "power": 21.886,
-    "reflexes": 11.034,
-    "magnet": 16.667,
-    "revive": 5.633,
+    "power": 10.922,
+    "reflexes": 9.723,
+    "magnet": 6.202,
+    "revive": 8.649,
     "fire spin": 10.345,
-    "sitrus berry": 22.039,
-    "synthesis": 16.786,
-    "tackle": 19.497,
-    "sprint": 24.242,
+    "sitrus berry": 14.586,
+    "synthesis": 7.252,
+    "tackle": 5.915,
+    "sprint": 8.124,
     "flame wheel": 1.774,
-    "harden": 12.993,
-    "swords dance": 13.412,
+    "harden": 11.413,
+    "swords dance": 13.122,
     "heat wave": 2.891,
     "will-o-wisp": 13.68,
-    "vigor": 17.028,
-    "learning": 24.759,
-    "armor": 25.184,
-    "aqua ring": 17.747,
-    "water gun": 22.794,
-    "focus": 7.592,
-    "hydro pump": 29.077,
-    "agility": 4.95,
-    "water gun → water gun+": 18.981,
-    "disarming voice": 12.029,
-    "fairy wind": 7.314,
-    "hyper beam": 4.559,
-    "hydro pump → hydro pump+": 9.78
+    "vigor": 9.789,
+    "learning": 10.105,
+    "armor": 7.502,
+    "aqua ring": 12.092,
+    "water gun": 5.857,
+    "focus": 5.321,
+    "hydro pump": 5.477,
+    "agility": 6.768,
+    "water gun -> water gun+": 23.348,
+    "disarming voice": 7.972,
+    "fairy wind": 9.346,
+    "hyper beam": 5.536,
+    "hydro pump -> hydro pump+": 12.326,
+    "disarming voice -> disarming voice+": 7.332,
+    "bubble": 2.623,
+    "water gun → water gun+": 7.8,
+    "substitute": 5.745,
+    "sniper": 4.275
   },
-  "eval_block_runs": [
-    323.8,
-    215.0
+  "eval_block_runs": [],
+  "best_eval_avg": 259.3333333333333,
+  "eval_block_history": [
+    {
+      "archived_at": "2026-10-28 18:03:43",
+      "runs": [
+        {
+          "duration": 161.4,
+          "score": 814.9,
+          "level": 13,
+          "damage_events": 82,
+          "swarm_damage_count": 73,
+          "wall_damage_count": 56,
+          "hazard_damage_count": 82,
+          "encircle_rate": 0.12321937321937322,
+          "last_stuck": false
+        }
+      ]
+    },
+    {
+      "archived_at": "2026-10-28 18:07:03",
+      "note": "Round 3 setup transition: archiving diagnostic timeout test runs",
+      "runs": [
+        {
+          "run_id": 113,
+          "policy_version": "10.2",
+          "policy_hash": "4d17f2245a",
+          "pokemon": "Tapu Fini",
+          "game_score": null,
+          "game_score_source": "unobserved_timeout",
+          "survival_time": 46.9,
+          "survival_time_source": "state_tracker_clock",
+          "max_level": 3,
+          "max_level_source": "state_tracker_verified",
+          "fitness_score": 269.15,
+          "fitness_score_source": "internal_composite_formula",
+          "duration": 46.9,
+          "damage_events": 0,
+          "swarm_damage_count": 0,
+          "wall_damage_count": 0,
+          "hazard_damage_count": 0,
+          "encircle_rate": 0.02518891687657431,
+          "last_stuck": false,
+          "end_reason": "timeout",
+          "upgrades": [
+            {
+              "modal_kind": "level-up",
+              "level": 2,
+              "name": "Bubble",
+              "tag": "Lv.1 > 2",
+              "time": 39.0
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 3,
+              "name": "Water Gun",
+              "tag": "Lv.1 > 2",
+              "time": 42.1
+            }
+          ]
+        },
+        {
+          "run_id": 114,
+          "policy_version": "10.2",
+          "policy_hash": "4d17f2245a",
+          "pokemon": "Tapu Fini",
+          "game_score": null,
+          "game_score_source": "unobserved_timeout",
+          "survival_time": 92.3,
+          "survival_time_source": "state_tracker_clock",
+          "max_level": 2,
+          "max_level_source": "state_tracker_verified",
+          "fitness_score": 393.05,
+          "fitness_score_source": "internal_composite_formula",
+          "duration": 92.3,
+          "damage_events": 0,
+          "swarm_damage_count": 0,
+          "wall_damage_count": 0,
+          "hazard_damage_count": 0,
+          "encircle_rate": 0.0956221198156682,
+          "last_stuck": false,
+          "end_reason": "timeout",
+          "upgrades": [
+            {
+              "modal_kind": "level-up",
+              "level": 2,
+              "name": "Focus",
+              "tag": "Common",
+              "time": 43.9
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "archived_at": "2026-10-28 18:26:25",
+      "note": "Candidate evaluation run #118 diagnostic timeout (survived full 301.9s, level 25, reached max-duration cutoff without match defeat)",
+      "runs": [
+        {
+          "run_id": 118,
+          "policy_version": "10.2",
+          "policy_hash": "339077c33e",
+          "pokemon": "Tapu Fini",
+          "game_score": null,
+          "game_score_source": "unobserved_timeout",
+          "survival_time": 301.9,
+          "survival_time_source": "state_tracker_clock",
+          "max_level": 25,
+          "max_level_source": "state_tracker_verified",
+          "fitness_score": 1746.65,
+          "fitness_score_source": "internal_composite_formula",
+          "duration": 301.9,
+          "damage_events": 74,
+          "swarm_damage_count": 56,
+          "wall_damage_count": 55,
+          "hazard_damage_count": 61,
+          "encircle_rate": 0.2829626687847498,
+          "last_stuck": false,
+          "end_reason": "timeout",
+          "upgrades": [
+            {
+              "modal_kind": "level-up",
+              "level": 2,
+              "name": "Power",
+              "tag": "Common",
+              "time": 40.3
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 3,
+              "name": "Magnet",
+              "tag": "Common",
+              "time": 40.3
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 4,
+              "name": "Learning",
+              "tag": "Rare",
+              "time": 40.3
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 5,
+              "name": "Learning",
+              "tag": "Common",
+              "time": 45.3
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 6,
+              "name": "Water Gun",
+              "tag": "Lv.1 > 2",
+              "time": 46.7
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 7,
+              "name": "Revive",
+              "tag": "Revive",
+              "time": 57.1
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 8,
+              "name": "Armor",
+              "tag": "Epic",
+              "time": 74.7
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 9,
+              "name": "Aqua Ring",
+              "tag": "New · Water",
+              "time": 83.3
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 10,
+              "name": "Disarming Voice",
+              "tag": "New · Fairy",
+              "time": 96.6
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 11,
+              "name": "Water Gun",
+              "tag": "Lv.2 > 3",
+              "time": 111.7
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 12,
+              "name": "Aqua Ring",
+              "tag": "Lv.1 > 2",
+              "time": 120.0
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 13,
+              "name": "Water Gun",
+              "tag": "Lv.3 > 4",
+              "time": 133.7
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 14,
+              "name": "Water Gun",
+              "tag": "Lv.4 > 5",
+              "time": 148.0
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 15,
+              "name": "Water Gun → Water Gun+",
+              "tag": "EVOLUTION",
+              "time": 163.4
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 16,
+              "name": "Magnet",
+              "tag": "Common",
+              "time": 171.8
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 17,
+              "name": "Disarming Voice",
+              "tag": "Lv.1 > 2",
+              "time": 185.3
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 18,
+              "name": "Aqua Ring",
+              "tag": "Lv.2 > 3",
+              "time": 198.8
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 19,
+              "name": "Aqua Ring",
+              "tag": "Lv.3 > 4",
+              "time": 206.3
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 20,
+              "name": "Aqua Ring",
+              "tag": "Lv.4 > 5",
+              "time": 209.5
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 21,
+              "name": "Magnet",
+              "tag": "Legendary",
+              "time": 233.1
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 22,
+              "name": "Disarming Voice",
+              "tag": "Lv.2 > 3",
+              "time": 244.5
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 23,
+              "name": "Disarming Voice",
+              "tag": "Lv.3 > 4",
+              "time": 252.2
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 24,
+              "name": "Magnet",
+              "tag": "Common",
+              "time": 262.9
+            },
+            {
+              "modal_kind": "level-up",
+              "level": 25,
+              "name": "Disarming Voice",
+              "tag": "Lv.4 > 5",
+              "time": 283.6
+            }
+          ]
+        }
+      ]
+    }
   ],
-  "best_eval_avg": 175.53333333333333
+  "best_game_score": 455,
+  "best_game_score_avg": 283.0
 }

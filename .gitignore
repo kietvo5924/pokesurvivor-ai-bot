@@ -36,6 +36,7 @@ data/run_history.jsonl
 data/metrics.csv
 data_backup/
 data_backup_round2/
+data_backup_round3/
 tests/test_data/
 
 # ==============================================================================
