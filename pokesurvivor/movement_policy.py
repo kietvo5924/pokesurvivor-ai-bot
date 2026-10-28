@@ -97,7 +97,12 @@ class MovementPolicy:
         terrain_status = vision_state.get("terrain_status") or terrain_info.get("status")
         if not terrain_status:
             terrain_status = "verified" if sector_obstacles else "unobserved"
-        is_terrain_verified = (terrain_status in ("verified", "local_view_only", "bounds_only"))
+        
+        # Distinction between:
+        # 1. Verified / Local view: local obstacle scanner has confirmed the path ahead
+        # 2. Bounds only: outer map boundary is known, but local obstacles are UNCONFIRMED
+        # 3. Unobserved: nothing is known
+        is_local_observed = (terrain_status in ("verified", "local_view_only"))
 
         def is_passable(sec: str) -> bool:
             if sector_obstacles.get(sec, False):
@@ -108,8 +113,9 @@ class MovementPolicy:
             return True
 
         def is_completely_safe(sec: str) -> bool:
-            # Distinguish unobserved terrain from verified safe paths
-            if not is_terrain_verified:
+            # A sector is completely safe ONLY if local terrain has been observed and clear.
+            # Knowing mapBounds alone ('bounds_only') does NOT guarantee local clearance!
+            if not is_local_observed:
                 return False
             if not is_passable(sec):
                 return False
@@ -410,7 +416,11 @@ class MovementPolicy:
         # ------------------------------------------------------------------
         # 4b. TACTICAL CANDIDATE NAVIGATION (Thieves, Springs, Chests, Shrines)
         # ------------------------------------------------------------------
-        tactical_target = self.target_evaluator.evaluate_targets(vision_state, now=now)
+        # Pass elapsed_time and current_level into target evaluator so it shares the exact same match state!
+        eval_state = dict(vision_state)
+        eval_state["elapsed_time"] = elapsed_time
+        eval_state["current_level"] = current_level
+        tactical_target = self.target_evaluator.evaluate_targets(eval_state, now=now)
         if tactical_target and danger_level in ("LOW", "MEDIUM") and min_enemy_dist > 140.0:
             t_sec = tactical_target.get("sector")
             if t_sec and is_passable(t_sec) and sector_dangers.get(t_sec, 0.0) < 800.0:

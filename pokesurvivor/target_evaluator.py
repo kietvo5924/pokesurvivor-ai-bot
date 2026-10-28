@@ -105,12 +105,34 @@ def normalize_game_state(state: Dict[str, Any]) -> Dict[str, Any]:
     # 5. Hazards
     hazards = list(state.get("hazards") or [])
 
+    # 6. Match Context (Elapsed Time & Level for Rift and tactical gating)
+    metrics = state.get("metrics") or {}
+    elapsed_time = None
+    if isinstance(metrics, dict) and metrics.get("time_seconds") is not None:
+        elapsed_time = float(metrics["time_seconds"])
+    elif state.get("elapsed_time") is not None:
+        elapsed_time = float(state["elapsed_time"])
+    elif state.get("time_seconds") is not None:
+        elapsed_time = float(state["time_seconds"])
+
+    current_level = None
+    if isinstance(metrics, dict) and metrics.get("level") is not None:
+        current_level = int(metrics["level"])
+    elif state.get("current_level") is not None:
+        current_level = int(state["current_level"])
+    elif state.get("level") is not None:
+        current_level = int(state["level"])
+    elif isinstance(state.get("ui"), dict) and state["ui"].get("verified_level") is not None:
+        current_level = int(state["ui"]["verified_level"])
+
     return {
         "player": player,
         "specials": specials,
         "enemies": enemies,
         "items": items,
-        "hazards": hazards
+        "hazards": hazards,
+        "elapsed_time": elapsed_time,
+        "current_level": current_level
     }
 
 class TargetEvaluator:
@@ -147,6 +169,21 @@ class TargetEvaluator:
         enemies = norm_state["enemies"]
         specials = norm_state["specials"]
         items = norm_state["items"]
+        elapsed_time = norm_state.get("elapsed_time")
+        current_level = norm_state.get("current_level")
+
+        def is_valid_coord(x, y) -> bool:
+            if x is None or y is None:
+                return False
+            try:
+                fx = float(x)
+                fy = float(y)
+            except (ValueError, TypeError):
+                return False
+            # Dummy (0, 0) is uninitialized and invalid regardless of source!
+            if abs(fx) < 1e-3 and abs(fy) < 1e-3:
+                return False
+            return True
 
         # 1. Check Sudden Burst Damage (Emergency Survival Mode)
         is_emergency = False
@@ -185,15 +222,17 @@ class TargetEvaluator:
                 )
                 tier = 5 if is_gold else 3
                 val = 14.0 if is_gold else 8.0
-                
+
                 ex = e.get("x")
                 ey = e.get("y")
                 dist = e.get("dist")
                 sec = e.get("sector")
 
                 if ex is not None and ey is not None:
-                    dx = ex - px
-                    dy = ey - py
+                    if not is_valid_coord(ex, ey):
+                        continue
+                    dx = float(ex) - px
+                    dy = float(ey) - py
                     if dist is None:
                         dist = math.hypot(dx, dy)
                     if not sec:
@@ -221,21 +260,40 @@ class TargetEvaluator:
                 })
 
         # TIER 4: Purple Rift Portal
-        # STRICT CONDITIONS: Only enter when healthy (hp_ratio >= 0.65) and not in emergency!
+        # STRICT CONDITIONS:
+        # 1. Healthy (hp_ratio >= 0.65) and not in emergency!
+        # 2. Match Phase: Never enter in early game (< 120s or Level < 3).
+        #    Must match MovementPolicy condition exactly:
+        #    (target_type == "portal" and elapsed_time >= 120.0 and current_level >= 3) or
+        #    (current_level >= 5 and elapsed_time >= 180.0)
         rift = specials.get("rift")
-        if rift and not is_emergency and hp_ratio is not None and hp_ratio >= 0.65:
+        target_type = rift.get("type", "portal") if isinstance(rift, dict) else "portal"
+
+        # Check early game constraint if match time or level is tracked
+        is_early_match = False
+        if elapsed_time is not None and elapsed_time < 120.0:
+            is_early_match = True
+        if current_level is not None and current_level < 3:
+            is_early_match = True
+        if target_type != "portal" and current_level is not None and current_level < 5:
+            is_early_match = True
+
+        can_enter_rift = (not is_early_match) and (hp_ratio is not None and hp_ratio >= 0.65)
+
+        if rift and not is_emergency and can_enter_rift:
             rx = rift.get("x")
             ry = rift.get("y")
             dist = rift.get("dist")
             r_sec = rift.get("sector")
 
             if rx is not None and ry is not None:
-                if rx == 0.0 and ry == 0.0 and not rift.get("source"):
+                # Discard dummy (0, 0) regardless of source
+                if not is_valid_coord(rx, ry):
                     dist = None
                     r_sec = None
                 else:
-                    dx = rx - px
-                    dy = ry - py
+                    dx = float(rx) - px
+                    dy = float(ry) - py
                     if dist is None:
                         dist = math.hypot(dx, dy)
                     if not r_sec:
@@ -271,12 +329,12 @@ class TargetEvaluator:
             s_sec = spring.get("sector")
 
             if sx is not None and sy is not None:
-                if sx == 0.0 and sy == 0.0 and not spring.get("source"):
+                if not is_valid_coord(sx, sy):
                     dist = None
                     s_sec = None
                 else:
-                    dx = sx - px
-                    dy = sy - py
+                    dx = float(sx) - px
+                    dy = float(sy) - py
                     if dist is None:
                         dist = math.hypot(dx, dy)
                     if not s_sec:
@@ -314,12 +372,12 @@ class TargetEvaluator:
             c_sec = chest.get("sector")
 
             if cx is not None and cy is not None:
-                if cx == 0.0 and cy == 0.0 and not chest.get("source"):
+                if not is_valid_coord(cx, cy):
                     dist = None
                     c_sec = None
                 else:
-                    dx = cx - px
-                    dy = cy - py
+                    dx = float(cx) - px
+                    dy = float(cy) - py
                     if dist is None:
                         dist = math.hypot(dx, dy)
                     if not c_sec:
@@ -354,12 +412,12 @@ class TargetEvaluator:
             a_sec = altar.get("sector")
 
             if ax is not None and ay is not None:
-                if ax == 0.0 and ay == 0.0 and not altar.get("source"):
+                if not is_valid_coord(ax, ay):
                     dist = None
                     a_sec = None
                 else:
-                    dx = ax - px
-                    dy = ay - py
+                    dx = float(ax) - px
+                    dy = float(ay) - py
                     if dist is None:
                         dist = math.hypot(dx, dy)
                     if not a_sec:

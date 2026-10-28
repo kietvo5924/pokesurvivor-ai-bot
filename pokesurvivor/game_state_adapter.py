@@ -56,9 +56,29 @@ CANVAS_HOOK_SCRIPT = """
   window.__psTelemetry = {
     sprites: [],
     texts: [],
-    camera: { s: 1.0, e: 0.0, f: 0.0 },
+    camera: { s: 1.0, e: 0.0, f: 0.0, verified: false, updatedAt: 0 },
     lastFrameAt: performance.now(),
     frameCount: 0
+  };
+
+  const isGameCanvas = (cvs) => {
+    if (!cvs || cvs.tagName !== 'CANVAS') return false;
+    if (cvs.classList && cvs.classList.contains('ps-canvas')) return true;
+    if (cvs.id === 'game-canvas') return true;
+    // Primary visible game canvas with standard game dimensions
+    return (cvs.width >= 640 && cvs.height >= 360 && cvs.offsetParent !== null);
+  };
+
+  const isCameraMatrix = (m) => {
+    if (!m) return false;
+    if (typeof m.a !== 'number' || typeof m.d !== 'number') return false;
+    // Uniform scale along x and y
+    if (Math.abs(m.a - m.d) > 0.005) return false;
+    // No rotation or shear in standard orthographic world camera
+    if (Math.abs(m.b || 0) > 0.005 || Math.abs(m.c || 0) > 0.005) return false;
+    // Scale must be in valid game zoom range
+    if (m.a < 0.2 || m.a > 5.0) return false;
+    return true;
   };
 
   const P = CanvasRenderingContext2D.prototype;
@@ -68,25 +88,34 @@ CANVAS_HOOK_SCRIPT = """
   // Intercept Canvas drawImage to capture camera transform & sprites
   P.drawImage = function(img, ...args) {
     try {
-      if (this.canvas && (this.canvas.classList?.contains('ps-canvas') || this.canvas.id === 'game-canvas' || this.canvas.tagName === 'CANVAS')) {
-        const m = this.getTransform ? this.getTransform() : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-        window.__psTelemetry.camera = { s: m.a, e: m.e, f: m.f };
+      if (isGameCanvas(this.canvas)) {
+        const m = this.getTransform ? this.getTransform() : null;
+        if (isCameraMatrix(m)) {
+          window.__psTelemetry.camera = {
+            s: m.a,
+            e: m.e,
+            f: m.f,
+            verified: true,
+            updatedAt: performance.now()
+          };
+        }
 
+        const m_cur = m || { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
         const src = img ? (img.src || (img.tagName ? img.tagName : 'canvas')) : '';
         const dw = args.length === 8 ? args[6] : args.length === 4 ? args[2] : (img ? (img.width || 0) : 0);
         const dh = args.length === 8 ? args[7] : args.length === 4 ? args[3] : (img ? (img.height || 0) : 0);
         const dx = args.length >= 4 ? args[args.length === 8 ? 4 : 0] : 0;
         const dy = args.length >= 4 ? args[args.length === 8 ? 5 : 1] : 0;
-        const cx = m.a * (dx + dw / 2) + m.e;
-        const cy = m.d * (dy + dh / 2) + m.f;
+        const cx = m_cur.a * (dx + dw / 2) + m_cur.e;
+        const cy = m_cur.d * (dy + dh / 2) + m_cur.f;
 
         if (window.__psTelemetry.sprites.length < 150) {
           window.__psTelemetry.sprites.push({
             src: String(src).slice(-60),
             cx: cx,
             cy: cy,
-            w: dw * m.a,
-            h: dh * m.d
+            w: dw * m_cur.a,
+            h: dh * m_cur.d
           });
         }
         window.__psTelemetry.lastFrameAt = performance.now();
@@ -98,7 +127,7 @@ CANVAS_HOOK_SCRIPT = """
   // Intercept fillText for live HUD information (HP, level, kills, coins, time)
   P.fillText = function(text, ...args) {
     try {
-      if (this.canvas && (this.canvas.classList?.contains('ps-canvas') || this.canvas.id === 'game-canvas' || this.canvas.tagName === 'CANVAS')) {
+      if (isGameCanvas(this.canvas)) {
         const str = String(text).trim();
         if (str && window.__psTelemetry.texts.length < 100) {
           window.__psTelemetry.texts.push(str);
@@ -149,8 +178,16 @@ class GameStateAdapter:
         hp_ratio = player.get("hp_ratio")
         rift_target = entities.get("specials", {}).get("rift")
 
-        px = float(player.get("world_x", 640.0))
-        py = float(player.get("world_y", 360.0))
+        p_wx = player.get("world_x")
+        p_wy = player.get("world_y")
+        if p_wx is not None and p_wy is not None:
+            px = float(p_wx)
+            py = float(p_wy)
+            coord_space = "world"
+        else:
+            px = float(player.get("screen_x", 640.0))
+            py = float(player.get("screen_y", 360.0))
+            coord_space = "screen"
         player["pos"] = (px, py)
 
         confidence = 0.98 if player.get("source") == "window_G" else (
@@ -163,6 +200,8 @@ class GameStateAdapter:
             "timestamp": now,
             "player": player,
             "player_pos": (px, py),
+            "coord_space": coord_space,
+            "camera_verified": player.get("camera_verified", False),
             "enemies": entities["enemies"],
             "hazards": entities["hazards"],
             "items": entities["items"],
@@ -284,7 +323,17 @@ class GameStateAdapter:
                             pickups: getList(pickupMgr).slice(0, 30).map(p => ({
                                 x: p.x, y: p.y, kind: p.kind
                             })),
-                            rift: (riftMgr && riftMgr.rift) ? { x: riftMgr.rift.x, y: riftMgr.rift.y, inArena: !!riftMgr.inArena, source: "window_G" } : null,
+                            rift: (() => {
+                                if (riftMgr && riftMgr.rift) {
+                                    const rx = Number(riftMgr.rift.x || 0);
+                                    const ry = Number(riftMgr.rift.y || 0);
+                                    const isAct = riftMgr.rift.active !== false && riftMgr.active !== false && !riftMgr.inArena;
+                                    if (isAct && (Math.abs(rx) > 1e-3 || Math.abs(ry) > 1e-3)) {
+                                        return { x: rx, y: ry, inArena: false, source: "window_G" };
+                                    }
+                                }
+                                return null;
+                            })(),
                             mapBounds: mapBounds,
                             specials: (() => {
                                 const objMgr = G.Objects || (G.Game ? G.Game.Objects : null) || (container ? container.Objects : null);
@@ -294,18 +343,30 @@ class GameStateAdapter:
                                 let chestObj = null;
 
                                 for (const it of allItems) {
-                                    if (!it || it.dead) continue;
+                                    if (!it || it.dead || it.active === false || it.collected) continue;
+                                    const itx = Number(it.x || 0);
+                                    const ity = Number(it.y || 0);
+                                    if (Math.abs(itx) < 1e-3 && Math.abs(ity) < 1e-3) continue;
                                     const k = String(it.kind || it.type || '').toLowerCase();
                                     if (k.includes('spring') && !springObj) {
-                                        springObj = { x: it.x, y: it.y, source: "window_G", kind: "spring" };
+                                        springObj = { x: itx, y: ity, source: "window_G", kind: "spring" };
                                     } else if ((k.includes('altar') || k.includes('shrine')) && !altarObj) {
-                                        altarObj = { x: it.x, y: it.y, source: "window_G", kind: "altar" };
+                                        altarObj = { x: itx, y: ity, source: "window_G", kind: "altar" };
                                     } else if (k.includes('chest') && !chestObj) {
-                                        chestObj = { x: it.x, y: it.y, source: "window_G", kind: "chest" };
+                                        chestObj = { x: itx, y: ity, source: "window_G", kind: "chest" };
+                                    }
+                                }
+                                let riftObj = null;
+                                if (riftMgr && riftMgr.rift) {
+                                    const rx = Number(riftMgr.rift.x || 0);
+                                    const ry = Number(riftMgr.rift.y || 0);
+                                    const isAct = riftMgr.rift.active !== false && riftMgr.active !== false && !riftMgr.inArena;
+                                    if (isAct && (Math.abs(rx) > 1e-3 || Math.abs(ry) > 1e-3)) {
+                                        riftObj = { x: rx, y: ry, inArena: false, source: "window_G" };
                                     }
                                 }
                                 return {
-                                    rift: (riftMgr && riftMgr.rift) ? { x: riftMgr.rift.x, y: riftMgr.rift.y, inArena: !!riftMgr.inArena, source: "window_G" } : null,
+                                    rift: riftObj,
                                     spring: springObj,
                                     altar: altarObj,
                                     chest: chestObj
@@ -324,9 +385,17 @@ class GameStateAdapter:
                         tel.texts = []; // Flush on read!
                         const sprites = tel.sprites ? tel.sprites.slice(0) : [];
                         tel.sprites = []; // Flush on read!
+                        const cam = tel.camera || { s: 1, e: 0, f: 0, verified: false, updatedAt: 0 };
                         res.telemetry = {
                             texts: texts,
-                            camera: tel.camera || { s: 1, e: 0, f: 0 },
+                            camera: {
+                                s: cam.s,
+                                e: cam.e,
+                                f: cam.f,
+                                verified: !!cam.verified,
+                                updatedAt: cam.updatedAt || 0,
+                                now: performance.now()
+                            },
                             spriteCount: sprites.length,
                             lastFrameAt: tel.lastFrameAt || 0
                         };
@@ -482,6 +551,53 @@ class GameStateAdapter:
         except Exception:
             return {}
 
+    def _validate_camera(self, telemetry: Optional[Dict[str, Any]]) -> Tuple[bool, float, float, float]:
+        """
+        Validates whether the camera matrix represents a genuine, fresh 2D orthographic camera:
+        1. Must not be flagged as unverified or stale
+        2. Must have valid uniform scale (0.2 <= s <= 5.0) and finite translation
+        3. Must not have non-zero rotation/shear
+        4. Must be fresh (not older than 1.5 seconds)
+        Returns (is_valid, s, e, f). If not valid, returns (False, 1.0, 0.0, 0.0).
+        """
+        if not telemetry:
+            return False, 1.0, 0.0, 0.0
+
+        cam = telemetry.get("camera")
+        if not isinstance(cam, dict):
+            return False, 1.0, 0.0, 0.0
+
+        if cam.get("verified") is False or cam.get("stale") is True or cam.get("unverified") is True:
+            return False, 1.0, 0.0, 0.0
+
+        try:
+            s = float(cam.get("s", 1.0))
+            e = float(cam.get("e", 0.0))
+            f = float(cam.get("f", 0.0))
+        except (ValueError, TypeError):
+            return False, 1.0, 0.0, 0.0
+
+        if not (0.2 <= s <= 5.0) or math.isnan(s) or math.isnan(e) or math.isnan(f) or math.isinf(s) or math.isinf(e) or math.isinf(f):
+            return False, 1.0, 0.0, 0.0
+
+        # Check rotation/shear if provided in matrix
+        b = float(cam.get("b", 0.0))
+        c = float(cam.get("c", 0.0))
+        if abs(b) > 0.005 or abs(c) > 0.005:
+            return False, 1.0, 0.0, 0.0
+
+        # Check freshness
+        now_ts = float(cam.get("now", 0.0))
+        updated_at = float(cam.get("updatedAt", cam.get("updated_at", 0.0)))
+        if now_ts > 0 and updated_at > 0 and (now_ts - updated_at) > 1500.0:
+            return False, 1.0, 0.0, 0.0
+
+        age_ms = cam.get("age_ms")
+        if age_ms is not None and float(age_ms) > 1500.0:
+            return False, 1.0, 0.0, 0.0
+
+        return True, s, e, f
+
     def _extract_player(self, browser_data: Dict[str, Any]) -> Dict[str, Any]:
         """Extracts player attributes, combining window.G, canvas texts, and OpenCV fallback."""
         # 1. From window.G
@@ -494,8 +610,11 @@ class GameStateAdapter:
             if hp is not None and max_hp and max_hp > 0:
                 hp_ratio = max(0.0, min(1.0, float(hp) / float(max_hp)))
             return {
-                "world_x": float(g_player.get("x", 0.0)),
-                "world_y": float(g_player.get("y", 0.0)),
+                "world_x": float(g_player.get("x", 640.0)),
+                "world_y": float(g_player.get("y", 360.0)),
+                "screen_x": 640.0,
+                "screen_y": 360.0,
+                "camera_verified": True,
                 "hp": hp,
                 "max_hp": max_hp,
                 "hp_ratio": hp_ratio,
@@ -541,14 +660,23 @@ class GameStateAdapter:
                 hp_ratio = None
                 source = "unobserved"
 
-        cam = telemetry.get("camera") or {"s": 1.0, "e": 0.0, "f": 0.0}
-        # Screen center = 640, 360 in 1280x720
-        world_x = (640.0 - cam.get("e", 0.0)) / max(0.01, cam.get("s", 1.0))
-        world_y = (360.0 - cam.get("f", 0.0)) / max(0.01, cam.get("s", 1.0))
+        # Validate Camera Matrix before deriving world coordinates
+        cam_valid, s, e_cam, f_cam = self._validate_camera(telemetry)
+        if cam_valid:
+            world_x = (640.0 - e_cam) / s
+            world_y = (360.0 - f_cam) / s
+            camera_verified = True
+        else:
+            world_x = None
+            world_y = None
+            camera_verified = False
 
         return {
             "world_x": world_x,
             "world_y": world_y,
+            "screen_x": 640.0,
+            "screen_y": 360.0,
+            "camera_verified": camera_verified,
             "hp": current_hp,
             "max_hp": max_hp,
             "hp_ratio": hp_ratio,
@@ -678,60 +806,116 @@ class GameStateAdapter:
         """Harmonizes entities and tactical metrics from window.G, canvas telemetry, and OpenCV."""
         g_state = browser_data.get("gState")
 
-        # Extract Camera Matrix (s = scale, e = translation x, f = translation y)
+        # Validate Camera Matrix before deriving world coordinates
         telemetry = browser_data.get("telemetry") or {}
-        cam = telemetry.get("camera") or {"s": 1.0, "e": 0.0, "f": 0.0}
-        s = max(0.01, float(cam.get("s", 1.0)))
-        e_cam = float(cam.get("e", 0.0))
-        f_cam = float(cam.get("f", 0.0))
-        px, py = float(player.get("world_x", 640.0)), float(player.get("world_y", 360.0))
+        cam_valid, s, e_cam, f_cam = self._validate_camera(telemetry)
 
-        # Branch 1: Complete window.G available
+        p_wx = player.get("world_x")
+        p_wy = player.get("world_y")
+        has_player_world = (p_wx is not None and p_wy is not None)
+        px = float(p_wx) if has_player_world else 640.0
+        py = float(p_wy) if has_player_world else 360.0
+
+        # Execute OpenCV perception if visual frame is present
+        cv_vision = None
+        if frame_img is not None:
+            try:
+                cv_vision = self.perception.analyze_frame(frame_img, is_moving=is_moving)
+            except Exception:
+                cv_vision = None
+
+        # Branch 1: window.G available (or partially available)
         if g_state:
-            enemies = []
+            g_enemies = g_state.get("enemies", [])
             sector_enemy_counts = {sec: 0 for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
             min_enemy_dist = 9999.0
             nearest_enemy_sec = None
             swarm_x, swarm_y, swarm_count = 0.0, 0.0, 0
 
-            for e in g_state.get("enemies", []):
-                e_wx = float(e["x"])
-                e_wy = float(e["y"])
-                e_sx = s * e_wx + e_cam
-                e_sy = s * e_wy + f_cam
-                dx = e_wx - px
-                dy = e_wy - py
-                dist = math.hypot(dx, dy)
-                deg = math.degrees(math.atan2(dy, dx)) % 360
-                sector = self._angle_to_sector(deg)
-                if sector in sector_enemy_counts:
-                    sector_enemy_counts[sector] += 1
-                if dist < min_enemy_dist:
-                    min_enemy_dist = dist
-                    nearest_enemy_sec = sector
-                if dist < 340.0:
-                    swarm_x += e_wx
-                    swarm_y += e_wy
-                    swarm_count += 1
+            enemies = []
+            if len(g_enemies) > 0:
+                enemy_source = "window_G"
+                for e in g_enemies:
+                    e_wx = float(e["x"])
+                    e_wy = float(e["y"])
+                    e_sx = s * e_wx + e_cam if cam_valid else None
+                    e_sy = s * e_wy + f_cam if cam_valid else None
+                    dx = e_wx - px
+                    dy = e_wy - py
+                    dist = math.hypot(dx, dy)
+                    deg = math.degrees(math.atan2(dy, dx)) % 360
+                    sector = self._angle_to_sector(deg)
+                    if sector in sector_enemy_counts:
+                        sector_enemy_counts[sector] += 1
+                    if dist < min_enemy_dist:
+                        min_enemy_dist = dist
+                        nearest_enemy_sec = sector
+                    if dist < 340.0:
+                        swarm_x += e_wx
+                        swarm_y += e_wy
+                        swarm_count += 1
 
-                enemies.append({
-                    "x": e_wx,
-                    "y": e_wy,
-                    "world_x": e_wx,
-                    "world_y": e_wy,
-                    "screen_x": e_sx,
-                    "screen_y": e_sy,
-                    "dist": dist,
-                    "sector": sector,
-                    "radius": e.get("r", 16),
-                    "type": e.get("dex"),
-                    "dex": e.get("dex"),
-                    "is_boss": e.get("boss", False),
-                    "is_shiny": e.get("shiny", False),
-                    "is_thief": e.get("behavior") == "thief" or e.get("dex") in [1000, 52],
-                    "hp": e.get("hp"),
-                    "source": "window_G"
-                })
+                    enemies.append({
+                        "x": e_wx,
+                        "y": e_wy,
+                        "world_x": e_wx,
+                        "world_y": e_wy,
+                        "screen_x": e_sx,
+                        "screen_y": e_sy,
+                        "dist": dist,
+                        "sector": sector,
+                        "radius": e.get("r", 16),
+                        "type": e.get("dex"),
+                        "dex": e.get("dex"),
+                        "is_boss": e.get("boss", False),
+                        "is_shiny": e.get("shiny", False),
+                        "is_thief": e.get("behavior") == "thief" or e.get("dex") in [1000, 52],
+                        "hp": e.get("hp"),
+                        "source": "window_G"
+                    })
+            elif cv_vision and cv_vision.get("enemies"):
+                # window.G list is empty, but OpenCV observes real enemies!
+                # Do NOT treat empty window.G as evidence of no danger!
+                enemy_source = "opencv_perception_fallback"
+                for e in cv_vision["enemies"]:
+                    xs = float(e.get("x", 640.0))
+                    ys = float(e.get("y", 360.0))
+                    if cam_valid and has_player_world:
+                        wx = px + (xs - 640.0) / s
+                        wy = py + (ys - 360.0) / s
+                        dx = wx - px
+                        dy = wy - py
+                    else:
+                        wx, wy = None, None
+                        dx = xs - 640.0
+                        dy = ys - 360.0
+                    dist = math.hypot(dx, dy)
+                    deg = math.degrees(math.atan2(dy, dx)) % 360
+                    sector = self._angle_to_sector(deg)
+                    if sector in sector_enemy_counts:
+                        sector_enemy_counts[sector] += 1
+                    if dist < min_enemy_dist:
+                        min_enemy_dist = dist
+                        nearest_enemy_sec = sector
+                    if dist < 340.0:
+                        swarm_x += (wx if wx is not None else xs)
+                        swarm_y += (wy if wy is not None else ys)
+                        swarm_count += 1
+
+                    enemies.append({
+                        **e,
+                        "x": wx if wx is not None else xs,
+                        "y": wy if wy is not None else ys,
+                        "world_x": wx,
+                        "world_y": wy,
+                        "screen_x": xs,
+                        "screen_y": ys,
+                        "dist": dist,
+                        "sector": sector,
+                        "source": "opencv_perception_fallback"
+                    })
+            else:
+                enemy_source = "window_G"
 
             swarm_center = (swarm_x / swarm_count, swarm_y / swarm_count) if swarm_count > 0 else None
 
@@ -772,16 +956,8 @@ class GameStateAdapter:
                         wall_obstacles[sec] = True
                         wall_costs[sec] = max(wall_costs[sec], cost)
 
-            # Check if frame_img is available to combine OpenCV terrain with map bounds
-            cv_obstacles = {}
-            cv_costs = {}
-            if frame_img is not None:
-                try:
-                    vis_aux = self.perception.analyze_frame(frame_img, is_moving=is_moving)
-                    cv_obstacles = vis_aux.get("sector_obstacles", {})
-                    cv_costs = vis_aux.get("sector_obs_costs", {})
-                except Exception:
-                    pass
+            cv_obstacles = cv_vision.get("sector_obstacles", {}) if cv_vision else {}
+            cv_costs = cv_vision.get("sector_obs_costs", {}) if cv_vision else {}
 
             if map_bounds and cv_obstacles:
                 sector_obstacles = {sec: wall_obstacles.get(sec, False) or cv_obstacles.get(sec, False) for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
@@ -804,90 +980,167 @@ class GameStateAdapter:
                 terrain_source = "unobserved"
                 terrain_status = "unobserved"
 
+            # 2. Hazards
+            g_hazards = g_state.get("hazards", [])
+            g_projs = g_state.get("projectiles", [])
             hazards = []
-            for z in g_state.get("hazards", []):
-                zx = float(z.get("x", 0.0))
-                zy = float(z.get("y", 0.0))
-                z_dist = math.hypot(zx - px, zy - py)
-                z_deg = math.degrees(math.atan2(zy - py, zx - px)) % 360
-                z_sec = self._angle_to_sector(z_deg)
-                hazards.append({
-                    "kind": z.get("kind"),
-                    "type": "telegraph",
-                    "x": zx,
-                    "y": zy,
-                    "world_x": zx,
-                    "world_y": zy,
-                    "screen_x": s * zx + e_cam,
-                    "screen_y": s * zy + f_cam,
-                    "dist": z_dist,
-                    "sector": z_sec,
-                    "radius": z.get("r", 20),
-                    "angle": z.get("angle", 0.0),
-                    "is_imminent": z_dist < 110.0,
-                    "source": "window_G"
-                })
-            for p in g_state.get("projectiles", []):
-                px_b = float(p.get("x", 0.0))
-                py_b = float(p.get("y", 0.0))
-                dx = px_b - px
-                dy = py_b - py
-                p_dist = math.hypot(dx, dy)
-                p_deg = math.degrees(math.atan2(dy, dx)) % 360
-                p_sec = self._angle_to_sector(p_deg)
-                vx = float(p.get("vx", 0.0))
-                vy = float(p.get("vy", 0.0))
-                v_sq = vx * vx + vy * vy
-                ttc = 99.0
-                dca = p_dist
-                is_imminent = False
-                if v_sq > 1e-4:
-                    rx = -dx
-                    ry = -dy
-                    t_star = (rx * vx + ry * vy) / v_sq
-                    if t_star > 0:
-                        ttc = t_star
-                        rel_x = rx - vx * t_star
-                        rel_y = ry - vy * t_star
-                        dca = math.hypot(rel_x, rel_y)
-                        if ttc < 1.2 and dca < 55.0:
-                            is_imminent = True
-                hazards.append({
-                    "kind": "shot",
-                    "type": "bullet",
-                    "x": px_b,
-                    "y": py_b,
-                    "world_x": px_b,
-                    "world_y": py_b,
-                    "screen_x": s * px_b + e_cam,
-                    "screen_y": s * py_b + f_cam,
-                    "dist": p_dist,
-                    "sector": p_sec,
-                    "vx": vx,
-                    "vy": vy,
-                    "ttc": ttc,
-                    "dca": dca,
-                    "is_imminent": is_imminent,
-                    "source": "window_G"
-                })
+            if len(g_hazards) > 0 or len(g_projs) > 0:
+                hazard_source = "window_G"
+                for z in g_hazards:
+                    zx = float(z.get("x", 0.0))
+                    zy = float(z.get("y", 0.0))
+                    z_dist = math.hypot(zx - px, zy - py)
+                    z_deg = math.degrees(math.atan2(zy - py, zx - px)) % 360
+                    z_sec = self._angle_to_sector(z_deg)
+                    hazards.append({
+                        "kind": z.get("kind"),
+                        "type": "telegraph",
+                        "x": zx,
+                        "y": zy,
+                        "world_x": zx,
+                        "world_y": zy,
+                        "screen_x": s * zx + e_cam if cam_valid else None,
+                        "screen_y": s * zy + f_cam if cam_valid else None,
+                        "dist": z_dist,
+                        "sector": z_sec,
+                        "radius": z.get("r", 20),
+                        "angle": z.get("angle", 0.0),
+                        "is_imminent": z_dist < 110.0,
+                        "source": "window_G"
+                    })
+                for p in g_projs:
+                    px_b = float(p.get("x", 0.0))
+                    py_b = float(p.get("y", 0.0))
+                    dx = px_b - px
+                    dy = py_b - py
+                    p_dist = math.hypot(dx, dy)
+                    p_deg = math.degrees(math.atan2(dy, dx)) % 360
+                    p_sec = self._angle_to_sector(p_deg)
+                    vx = float(p.get("vx", 0.0))
+                    vy = float(p.get("vy", 0.0))
+                    v_sq = vx * vx + vy * vy
+                    ttc = 99.0
+                    dca = p_dist
+                    is_imminent = False
+                    if v_sq > 1e-4:
+                        rx = -dx
+                        ry = -dy
+                        t_star = (rx * vx + ry * vy) / v_sq
+                        if t_star > 0:
+                            ttc = t_star
+                            rel_x = rx - vx * t_star
+                            rel_y = ry - vy * t_star
+                            dca = math.hypot(rel_x, rel_y)
+                            if ttc < 1.2 and dca < 55.0:
+                                is_imminent = True
+                    hazards.append({
+                        "kind": "shot",
+                        "type": "bullet",
+                        "x": px_b,
+                        "y": py_b,
+                        "world_x": px_b,
+                        "world_y": py_b,
+                        "screen_x": s * px_b + e_cam if cam_valid else None,
+                        "screen_y": s * py_b + f_cam if cam_valid else None,
+                        "dist": p_dist,
+                        "sector": p_sec,
+                        "vx": vx,
+                        "vy": vy,
+                        "ttc": ttc,
+                        "dca": dca,
+                        "is_imminent": is_imminent,
+                        "source": "window_G"
+                    })
+            elif cv_vision and cv_vision.get("hazards"):
+                hazard_source = "opencv_hazards_fallback"
+                for h in cv_vision["hazards"]:
+                    xs = float(h.get("x", 640.0))
+                    ys = float(h.get("y", 360.0))
+                    if cam_valid and has_player_world:
+                        wx = px + (xs - 640.0) / s
+                        wy = py + (ys - 360.0) / s
+                        dx = wx - px
+                        dy = wy - py
+                    else:
+                        wx, wy = None, None
+                        dx = xs - 640.0
+                        dy = ys - 360.0
+                    dist = math.hypot(dx, dy)
+                    deg = math.degrees(math.atan2(dy, dx)) % 360
+                    sec = self._angle_to_sector(deg)
+                    haz_entry = {
+                        **h,
+                        "x": wx if wx is not None else xs,
+                        "y": wy if wy is not None else ys,
+                        "world_x": wx,
+                        "world_y": wy,
+                        "screen_x": xs,
+                        "screen_y": ys,
+                        "dist": dist,
+                        "sector": sec,
+                        "source": "opencv_hazards_fallback"
+                    }
+                    if "vx" in h and cam_valid:
+                        haz_entry["vx"] = float(h["vx"]) / s
+                    if "vy" in h and cam_valid:
+                        haz_entry["vy"] = float(h["vy"]) / s
+                    hazards.append(haz_entry)
+            else:
+                hazard_source = "window_G"
 
+            # 3. Items
+            g_pickups = g_state.get("pickups", [])
             items = []
-            for it in g_state.get("pickups", []):
-                ix = float(it.get("x", 0.0))
-                iy = float(it.get("y", 0.0))
-                items.append({
-                    "x": ix,
-                    "y": iy,
-                    "world_x": ix,
-                    "world_y": iy,
-                    "screen_x": s * ix + e_cam,
-                    "screen_y": s * iy + f_cam,
-                    "dist": math.hypot(ix - px, iy - py),
-                    "kind": it.get("kind", "xp"),
-                    "source": "window_G"
-                })
+            if len(g_pickups) > 0:
+                item_source = "window_G"
+                for it in g_pickups:
+                    ix = float(it.get("x", 0.0))
+                    iy = float(it.get("y", 0.0))
+                    items.append({
+                        "x": ix,
+                        "y": iy,
+                        "world_x": ix,
+                        "world_y": iy,
+                        "screen_x": s * ix + e_cam if cam_valid else None,
+                        "screen_y": s * iy + f_cam if cam_valid else None,
+                        "dist": math.hypot(ix - px, iy - py),
+                        "kind": it.get("kind", "xp"),
+                        "source": "window_G"
+                    })
+            elif cv_vision and (cv_vision.get("gems") or cv_vision.get("items_on_ground")):
+                item_source = "opencv_items_fallback"
+                raw_items = list(cv_vision.get("gems", [])) + list(cv_vision.get("items_on_ground", []))
+                for it in raw_items:
+                    xs = float(it.get("x", 640.0))
+                    ys = float(it.get("y", 360.0))
+                    if cam_valid and has_player_world:
+                        wx = px + (xs - 640.0) / s
+                        wy = py + (ys - 360.0) / s
+                        dx = wx - px
+                        dy = wy - py
+                    else:
+                        wx, wy = None, None
+                        dx = xs - 640.0
+                        dy = ys - 360.0
+                    dist = math.hypot(dx, dy)
+                    deg = math.degrees(math.atan2(dy, dx)) % 360
+                    sec = self._angle_to_sector(deg)
+                    items.append({
+                        **it,
+                        "x": wx if wx is not None else xs,
+                        "y": wy if wy is not None else ys,
+                        "world_x": wx,
+                        "world_y": wy,
+                        "screen_x": xs,
+                        "screen_y": ys,
+                        "dist": dist,
+                        "sector": sec,
+                        "source": "opencv_items_fallback"
+                    })
+            else:
+                item_source = "window_G"
 
-            # Genuine specials from window.G
+            # 4. Specials (Strictly reject dummy (0, 0) regardless of source!)
             raw_specials = g_state.get("specials") or {}
             specials = {
                 "rift": None,
@@ -903,22 +1156,85 @@ class GameStateAdapter:
                 if sp_item and isinstance(sp_item, dict):
                     sp_x = sp_item.get("x")
                     sp_y = sp_item.get("y")
+                    # Discard dummy (0, 0) coordinates!
                     if sp_x is not None and sp_y is not None:
-                        sp_dist = math.hypot(float(sp_x) - px, float(sp_y) - py)
-                        sp_deg = math.degrees(math.atan2(float(sp_y) - py, float(sp_x) - px)) % 360
-                        sp_sec = self._angle_to_sector(sp_deg)
-                        specials[k_spec] = {
-                            **sp_item,
-                            "x": float(sp_x),
-                            "y": float(sp_y),
-                            "world_x": float(sp_x),
-                            "world_y": float(sp_y),
-                            "screen_x": s * float(sp_x) + e_cam,
-                            "screen_y": s * float(sp_y) + f_cam,
-                            "dist": sp_dist,
-                            "sector": sp_sec,
-                            "source": sp_item.get("source", "window_G")
-                        }
+                        fx = float(sp_x)
+                        fy = float(sp_y)
+                        if abs(fx) > 1e-3 or abs(fy) > 1e-3:
+                            sp_dist = math.hypot(fx - px, fy - py)
+                            sp_deg = math.degrees(math.atan2(fy - py, fx - px)) % 360
+                            sp_sec = self._angle_to_sector(sp_deg)
+                            specials[k_spec] = {
+                                **sp_item,
+                                "x": fx,
+                                "y": fy,
+                                "world_x": fx,
+                                "world_y": fy,
+                                "screen_x": s * fx + e_cam if cam_valid else None,
+                                "screen_y": s * fy + f_cam if cam_valid else None,
+                                "dist": sp_dist,
+                                "sector": sp_sec,
+                                "source": sp_item.get("source", "window_G")
+                            }
+
+            # If window.G specials are missing, check cv_vision for rift and chest
+            if not specials.get("rift") and cv_vision and cv_vision.get("rift_target"):
+                r_raw = cv_vision["rift_target"]
+                rx_s = float(r_raw.get("x", 640.0))
+                ry_s = float(r_raw.get("y", 360.0))
+                if abs(rx_s) > 1e-3 or abs(ry_s) > 1e-3:
+                    if cam_valid and has_player_world:
+                        rx_w = px + (rx_s - 640.0) / s
+                        ry_w = py + (ry_s - 360.0) / s
+                        dx = rx_w - px
+                        dy = ry_w - py
+                    else:
+                        rx_w, ry_w = None, None
+                        dx = rx_s - 640.0
+                        dy = ry_s - 360.0
+                    r_dist = math.hypot(dx, dy)
+                    r_deg = math.degrees(math.atan2(dy, dx)) % 360
+                    specials["rift"] = {
+                        "x": rx_w if rx_w is not None else rx_s,
+                        "y": ry_w if ry_w is not None else ry_s,
+                        "world_x": rx_w,
+                        "world_y": ry_w,
+                        "screen_x": rx_s,
+                        "screen_y": ry_s,
+                        "dist": r_dist,
+                        "sector": self._angle_to_sector(r_deg),
+                        "type": "portal",
+                        "source": r_raw.get("source", "opencv_purple_portal")
+                    }
+
+            if not specials.get("chest") and cv_vision and cv_vision.get("chest"):
+                c_raw = cv_vision["chest"]
+                cx_s = float(c_raw.get("x", 640.0))
+                cy_s = float(c_raw.get("y", 360.0))
+                if abs(cx_s) > 1e-3 or abs(cy_s) > 1e-3:
+                    if cam_valid and has_player_world:
+                        cx_w = (cx_s - e_cam) / s
+                        cy_w = (cy_s - f_cam) / s
+                        dx = cx_w - px
+                        dy = cy_w - py
+                    else:
+                        cx_w, cy_w = None, None
+                        dx = cx_s - 640.0
+                        dy = cy_s - 360.0
+                    c_dist = math.hypot(dx, dy)
+                    c_deg = math.degrees(math.atan2(dy, dx)) % 360
+                    specials["chest"] = {
+                        "x": cx_w if cx_w is not None else cx_s,
+                        "y": cy_w if cy_w is not None else cy_s,
+                        "world_x": cx_w,
+                        "world_y": cy_w,
+                        "screen_x": cx_s,
+                        "screen_y": cy_s,
+                        "dist": c_dist,
+                        "sector": self._angle_to_sector(c_deg),
+                        "type": "chest",
+                        "source": "opencv_chest"
+                    }
 
             close_threats = [e for e in enemies if e["dist"] < 175.0]
             is_encircled = len(close_threats) >= 7 and len({e["sector"] for e in close_threats}) >= 4
@@ -956,18 +1272,20 @@ class GameStateAdapter:
                 "danger_level": danger_level,
                 "is_encircled": is_encircled,
                 "is_stuck": False,
-                "source": "window_G",
-                "hazard_source": "window_G"
+                "source": enemy_source,
+                "hazard_source": hazard_source
             }
             self.last_cached_entities = res_g
             self.last_frame_time = time.time()
             return res_g
 
         # Branch 2: OpenCV Visual Perception (Doofcraft & Generic Canvas)
-        if frame_img is not None:
+        vision = cv_vision
+        if vision is None and frame_img is not None:
             vision = self.perception.analyze_frame(frame_img, is_moving=is_moving)
-            
-            # 1. Transform enemies to unified world coordinates
+
+        if vision is not None:
+            # 1. Transform enemies
             enemies = []
             sector_enemy_counts = {sec: 0 for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
             min_enemy_dist = 9999.0
@@ -977,25 +1295,32 @@ class GameStateAdapter:
             for e in vision.get("enemies", []):
                 xs = float(e.get("x", 640.0))
                 ys = float(e.get("y", 360.0))
-                wx = (xs - e_cam) / s
-                wy = (ys - f_cam) / s
-                dist_w = math.hypot(wx - px, wy - py)
-                deg_w = math.degrees(math.atan2(wy - py, wx - px)) % 360
+                if cam_valid and has_player_world:
+                    wx = px + (xs - 640.0) / s
+                    wy = py + (ys - 360.0) / s
+                    dx = wx - px
+                    dy = wy - py
+                else:
+                    wx, wy = None, None
+                    dx = xs - 640.0
+                    dy = ys - 360.0
+                dist_w = math.hypot(dx, dy)
+                deg_w = math.degrees(math.atan2(dy, dx)) % 360
                 sec_w = self._angle_to_sector(deg_w)
                 if sec_w in sector_enemy_counts:
                     sector_enemy_counts[sec_w] += 1
                 if dist_w < min_enemy_dist:
                     min_enemy_dist = dist_w
                     nearest_enemy_sec = sec_w
-                if dist_w < (340.0 / s):
-                    swarm_wx += wx
-                    swarm_wy += wy
+                if dist_w < 340.0:
+                    swarm_wx += (wx if wx is not None else xs)
+                    swarm_wy += (wy if wy is not None else ys)
                     swarm_count += 1
 
                 enemies.append({
                     **e,
-                    "x": wx,
-                    "y": wy,
+                    "x": wx if wx is not None else xs,
+                    "y": wy if wy is not None else ys,
                     "world_x": wx,
                     "world_y": wy,
                     "screen_x": xs,
@@ -1012,15 +1337,22 @@ class GameStateAdapter:
             for h in vision.get("hazards", []):
                 xs = float(h.get("x", 640.0))
                 ys = float(h.get("y", 360.0))
-                wx = (xs - e_cam) / s
-                wy = (ys - f_cam) / s
-                dist_w = math.hypot(wx - px, wy - py)
-                deg_w = math.degrees(math.atan2(wy - py, wx - px)) % 360
+                if cam_valid and has_player_world:
+                    wx = px + (xs - 640.0) / s
+                    wy = py + (ys - 360.0) / s
+                    dx = wx - px
+                    dy = wy - py
+                else:
+                    wx, wy = None, None
+                    dx = xs - 640.0
+                    dy = ys - 360.0
+                dist_w = math.hypot(dx, dy)
+                deg_w = math.degrees(math.atan2(dy, dx)) % 360
                 sec_w = self._angle_to_sector(deg_w)
                 haz_entry = {
                     **h,
-                    "x": wx,
-                    "y": wy,
+                    "x": wx if wx is not None else xs,
+                    "y": wy if wy is not None else ys,
                     "world_x": wx,
                     "world_y": wy,
                     "screen_x": xs,
@@ -1029,9 +1361,9 @@ class GameStateAdapter:
                     "sector": sec_w,
                     "source": h.get("source", "opencv_hazards")
                 }
-                if "vx" in h:
+                if "vx" in h and cam_valid:
                     haz_entry["vx"] = float(h["vx"]) / s
-                if "vy" in h:
+                if "vy" in h and cam_valid:
                     haz_entry["vy"] = float(h["vy"]) / s
                 hazards.append(haz_entry)
 
@@ -1042,15 +1374,22 @@ class GameStateAdapter:
             for it in raw_items:
                 xs = float(it.get("x", 640.0))
                 ys = float(it.get("y", 360.0))
-                wx = (xs - e_cam) / s
-                wy = (ys - f_cam) / s
-                dist_w = math.hypot(wx - px, wy - py)
-                deg_w = math.degrees(math.atan2(wy - py, wx - px)) % 360
+                if cam_valid and has_player_world:
+                    wx = px + (xs - 640.0) / s
+                    wy = py + (ys - 360.0) / s
+                    dx = wx - px
+                    dy = wy - py
+                else:
+                    wx, wy = None, None
+                    dx = xs - 640.0
+                    dy = ys - 360.0
+                dist_w = math.hypot(dx, dy)
+                deg_w = math.degrees(math.atan2(dy, dx)) % 360
                 sec_w = self._angle_to_sector(deg_w)
                 it_entry = {
                     **it,
-                    "x": wx,
-                    "y": wy,
+                    "x": wx if wx is not None else xs,
+                    "y": wy if wy is not None else ys,
                     "world_x": wx,
                     "world_y": wy,
                     "screen_x": xs,
@@ -1062,29 +1401,38 @@ class GameStateAdapter:
                 items.append(it_entry)
                 k_type = str(it.get("type", it.get("kind", ""))).lower()
                 if "chest" in k_type and not chest_obj:
-                    chest_obj = it_entry
+                    if abs(xs) > 1e-3 or abs(ys) > 1e-3:
+                        chest_obj = it_entry
 
-            # 4. Transform specials
+            # 4. Transform specials (strictly reject (0, 0))
             rift_raw = vision.get("rift_target")
             rift_target = None
             if rift_raw:
-                r_dict = dict(rift_raw)
-                if r_dict.get("x") is not None and r_dict.get("y") is not None:
-                    rx_s = float(r_dict["x"])
-                    ry_s = float(r_dict["y"])
-                    rx_w = (rx_s - e_cam) / s
-                    ry_w = (ry_s - f_cam) / s
-                    r_dict["x"] = rx_w
-                    r_dict["y"] = ry_w
+                rx_s = float(rift_raw.get("x", 640.0))
+                ry_s = float(rift_raw.get("y", 360.0))
+                if abs(rx_s) > 1e-3 or abs(ry_s) > 1e-3:
+                    if cam_valid and has_player_world:
+                        rx_w = px + (rx_s - 640.0) / s
+                        ry_w = py + (ry_s - 360.0) / s
+                        dx = rx_w - px
+                        dy = ry_w - py
+                    else:
+                        rx_w, ry_w = None, None
+                        dx = rx_s - 640.0
+                        dy = ry_s - 360.0
+                    r_dict = dict(rift_raw)
+                    r_dict["x"] = rx_w if rx_w is not None else rx_s
+                    r_dict["y"] = ry_w if ry_w is not None else ry_s
                     r_dict["world_x"] = rx_w
                     r_dict["world_y"] = ry_w
                     r_dict["screen_x"] = rx_s
                     r_dict["screen_y"] = ry_s
-                    r_dict["dist"] = math.hypot(rx_w - px, ry_w - py)
-                    deg_r = math.degrees(math.atan2(ry_w - py, rx_w - px)) % 360
+                    r_dict["dist"] = math.hypot(dx, dy)
+                    deg_r = math.degrees(math.atan2(dy, dx)) % 360
                     r_dict["sector"] = self._angle_to_sector(deg_r)
+                    r_dict["type"] = "portal"
                     r_dict["source"] = r_dict.get("source", "opencv_purple_portal")
-                rift_target = r_dict
+                    rift_target = r_dict
 
             specials = {
                 "rift": rift_target,
