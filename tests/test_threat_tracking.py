@@ -72,5 +72,23 @@ class TestThreatTrackingAndEvasion(unittest.TestCase):
         self.assertNotEqual(dodge_dir, "N")
         self.assertNotEqual(dodge_dir, "S")
 
+    def test_swarm_tangential_kiting(self):
+        cx, cy = 640, 360
+        state = {
+            "player_pos": (cx, cy),
+            "hp_ratio": 0.9,
+            "hp_status": "VERIFIED",
+            "min_enemy_dist": 200.0,
+            "swarm_center": (cx - 100, cy),  # Swarm is directly West
+            "danger_level": "HIGH",
+            "hazards": [],
+            "sector_obstacles": {s: False for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]},
+            "sector_obs_costs": {s: 0.0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]},
+            "sector_enemy_counts": {s: 0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]},
+            "sector_dangers": {s: 0.0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]}
+        }
+        dir_name, keys, dur = self.movement.select_movement(state)
+        self.assertIn(dir_name, ["N", "S", "NE", "SE", "E"])
+
 if __name__ == "__main__":
     unittest.main()

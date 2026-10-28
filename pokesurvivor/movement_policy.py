@@ -355,8 +355,16 @@ class MovementPolicy:
             elif t2_ok and not t1_ok:
                 kite_dir = t2_sec
             elif t1_ok and t2_ok:
-                t1_bias = 25.0 if t1_sec in OPEN_FIELD_PRIORITY else 0.0
-                t2_bias = 25.0 if t2_sec in OPEN_FIELD_PRIORITY else 0.0
+                # Dynamic open field clearance: reward direction with open adjacent flanks
+                deg1 = DIR_ANGLES.get(t1_sec, 0)
+                deg2 = DIR_ANGLES.get(t2_sec, 0)
+                n1_a = self._angle_to_sector((deg1 - 45 + 360) % 360)
+                n1_b = self._angle_to_sector((deg1 + 45) % 360)
+                n2_a = self._angle_to_sector((deg2 - 45 + 360) % 360)
+                n2_b = self._angle_to_sector((deg2 + 45) % 360)
+
+                t1_bias = 25.0 if (not sector_obstacles.get(n1_a, False) and not sector_obstacles.get(n1_b, False)) else 0.0
+                t2_bias = 25.0 if (not sector_obstacles.get(n2_a, False) and not sector_obstacles.get(n2_b, False)) else 0.0
 
                 # Favor tangential direction with FEWER enemies (using learned policy weights)
                 mobs_t1 = sector_enemy_counts.get(t1_sec, 0)
