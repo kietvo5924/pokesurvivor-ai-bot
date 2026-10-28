@@ -44,6 +44,10 @@ class MovementPolicy:
         self.cruise_dir_index = 0
         self.stuck_eject_time = 0.0
         self.last_dodge_time = 0.0
+        # Temporal Pin Detector (Corner Trapping Prevention)
+        self.pos_history: List[Tuple[float, float, float]] = []  # (timestamp, x, y)
+        self.pin_escape_until = 0.0
+        self.pin_escape_dir: Optional[str] = None
 
     def update_config(self, policy_config: Dict[str, Any]):
         self.config = policy_config.get("movement", {})
@@ -108,6 +112,10 @@ class MovementPolicy:
             score += mobs * self.mob_penalty_weight
             if mobs == 0:
                 score -= self.mob_clear_corridor_bonus
+            # Quadratic close contact penalty for any mob in sector within 85px
+            close_in_sec = sum(1 for e in vision_state.get("enemies", []) if e.get("sector") == s and e.get("dist", 999.0) < 85.0)
+            if close_in_sec > 0:
+                score += close_in_sec * 500.0
             # Dynamic open field clearance bonus: reward sectors whose adjacent sectors are also open
             deg = DIR_ANGLES.get(s, 0)
             n1 = self._angle_to_sector((deg - 45 + 360) % 360)
@@ -134,6 +142,39 @@ class MovementPolicy:
             all_dirs = list(DIR_ANGLES.keys())
             all_dirs.sort(key=lambda s: (sector_obs_costs.get(s, 0.0), sector_enemy_counts.get(s, 0), sector_dangers.get(s, 0.0)))
             return all_dirs[0]
+
+        # ------------------------------------------------------------------
+        # PIN DETECTOR & CORNER ESCAPE (From PokeSurvivorTool analysis)
+        # ------------------------------------------------------------------
+        self.pos_history = [p for p in self.pos_history if now - p[0] <= 1.8]
+        self.pos_history.append((now, float(cx), float(cy)))
+
+        if now < self.pin_escape_until and self.pin_escape_dir:
+            if not sector_obstacles.get(self.pin_escape_dir, False):
+                return self.pin_escape_dir, DIR_KEYS[self.pin_escape_dir], max(0.10, self.pin_escape_until - now)
+
+        if len(self.pos_history) >= 10 and (now - self.pos_history[0][0]) >= 1.0:
+            init_x, init_y = self.pos_history[0][1], self.pos_history[0][2]
+            net_disp = math.hypot(cx - init_x, cy - init_y)
+            has_obstacle = any(sector_obstacles.values()) or any(c > 150.0 for c in sector_obs_costs.values())
+            
+            if net_disp < 32.0 and has_obstacle:
+                wall_vx, wall_vy = 0.0, 0.0
+                for s, blocked in sector_obstacles.items():
+                    if blocked or sector_obs_costs.get(s, 0.0) > 80.0:
+                        cost_w = max(1.0, sector_obs_costs.get(s, 0.0) / 80.0)
+                        ang = math.radians(DIR_ANGLES[s])
+                        wall_vx -= math.cos(ang) * cost_w
+                        wall_vy -= math.sin(ang) * cost_w
+
+                if abs(wall_vx) > 1e-3 or abs(wall_vy) > 1e-3:
+                    escape_angle = math.degrees(math.atan2(wall_vy, wall_vx)) % 360
+                    escape_dir = self._angle_to_sector(escape_angle)
+                    self.pin_escape_dir = escape_dir
+                    self.pin_escape_until = now + 0.75
+                    self.pos_history.clear()
+                    self._set_dir(escape_dir, now)
+                    return escape_dir, DIR_KEYS[escape_dir], 0.75
 
         # ------------------------------------------------------------------
         # ANTI-OSCILLATION DIRECTION COMMITMENT

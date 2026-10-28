@@ -1,15 +1,18 @@
+import os
+import json
 from typing import Dict, Any, List, Optional, Tuple
 
 class UpgradePolicy:
     """
     PokéSurvivor Meta Upgrade & Fusion Policy:
     Built on official community meta strategies to push past 15-20+ minutes:
-    - Rushes primary attack (Ember) to Level 5.
-    - Secures evolution-enabling stat cards (Power for Fire Blast, Sprint for Speed, Vigor for HP).
-    - Immediately selects Golden Evolution cards (Fire Blast, Take Down).
+    - Rushes primary attack (Water Gun / Ember) to Level 5.
+    - Dynamically secures evolution-enabling stat cards based on 87-move evolution database.
+    - Immediately selects Golden Evolution cards.
     - Rift Boss Reward: Bonds 2 moves together (max 4 loadout: 1 Buff + 3 Attack moves firing simultaneously).
     - Held Item: Manages single held item slot (swapping for top-tier survival/damage items).
     - Chests: Prioritizes Rare Candy (+1 level) > Meta Upgrades > Gacha Tickets.
+    - Reroll: Triggers reroll when no card reaches the viable threshold (< 500 score).
     """
     def __init__(self, policy_config: Dict[str, Any]):
         self.active_pokemon: str = "Unknown"
@@ -19,8 +22,20 @@ class UpgradePolicy:
         self.acquired_stats: List[str] = []
         self.held_item: Optional[str] = None
         self.bonded_groups: List[str] = []
+        self.evolutions_db: Dict[str, Any] = self._load_evolutions_db()
         self.update_config(policy_config)
         self.reset_match()
+
+    def _load_evolutions_db(self) -> Dict[str, Any]:
+        """Loads verified move evolutions database extracted from PokéSurvivor client."""
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evolutions_db.json")
+        try:
+            if os.path.exists(db_path):
+                with open(db_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
 
     def set_active_pokemon(self, name: str, starting_move: str = "", dex: Optional[int] = None):
         """Dynamically adapts upgrade prioritization to the active Pokemon and its starter move."""
@@ -232,17 +247,18 @@ class UpgradePolicy:
 
             # 1. GOLDEN EVOLUTION CARDS (Supreme priority - clears entire screens!)
             is_evo = (
-                "evolution" in tag or "evolv" in name or "gold" in tag or
+                "evolution" in tag or "evolv" in name or "gold" in tag or "evo" in tag or "★" in name or "⭐" in name or
                 "scald" in name or "blizzard" in name or "hydro cannon" in name or
                 "phantom force" in name or "frenzy plant" in name or "poison gas" in name or
                 "fire blast" in name or "overheat" in name or "sacred fire" in name or
-                "take down" in name or "inferno" in name or "extreme speed" in name or "surf" in name
+                "take down" in name or "inferno" in name or "extreme speed" in name or "surf" in name or
+                "water gun+" in name or "water gun →" in name
             )
             if is_evo:
                 score += 2000.0
                 reasons.append("GOLDEN_EVOLUTION_MAX_PRIORITY")
 
-            # 2. HP RECOVERY & HEALING SELECTION
+            # 2. HP RECOVERY & HEALING SELECTION (HP-sensitive)
             elif "sitrus berry" in name or "berry" in name or "heal" in desc or "recovery" in desc:
                 if is_damaged:
                     score += 1500.0
@@ -251,8 +267,9 @@ class UpgradePolicy:
                     score += 850.0
                     reasons.append("DEFENSIVE_HEAL_UNKNOWN_HP")
                 else:
-                    score += 150.0
-                    reasons.append("preventative_heal")
+                    # When healthy (HP >= 50%), sharply demote Sitrus Berry so an upgrade is not wasted!
+                    score += 10.0
+                    reasons.append("preventative_heal_demoted")
 
             # 3. CORE BUFF MOVES (Aqua Ring provides 1.6 HP/s up to 6.4 HP/s passive heal!)
             elif "aqua ring" in name:
@@ -277,6 +294,7 @@ class UpgradePolicy:
                 else:
                     score += 80.0
                     reasons.append("water_gun_already_max_lv5")
+
             elif "ember" in name:
                 ember_lvl = self.acquired_moves.get("ember", 1)
                 if ember_lvl < 5:
@@ -285,6 +303,14 @@ class UpgradePolicy:
                 else:
                     score += 80.0
                     reasons.append("ember_already_max_lv5")
+
+            # 5. DYNAMIC EVOLUTION KEY: Check if this card is the REQUIRED PASSIVE for ANY owned move
+            elif self._is_required_passive_for_owned_moves(name):
+                matched_move, req_p = self._get_required_passive_context(name)
+                score += 950.0
+                reasons.append(f"{req_p.upper()}_REQUIRED_TO_EVOLVE_{matched_move.upper()}")
+
+            # 6. PRIORITY HIGH-TIER ATTACK MOVES
             elif "ice beam" in name:
                 ib_lvl = self.acquired_moves.get("ice beam", 0)
                 if ib_lvl < 5:
@@ -309,18 +335,6 @@ class UpgradePolicy:
                 else:
                     score += 80.0
                     reasons.append("shadow_ball_already_max_lv5")
-
-            # 5. EVOLUTION PREREQUISITE STAT CARD: POWER (Attack - Evolves Water Gun -> Scald, Ember -> Fire Blast)
-            elif "power" in name:
-                if not has_power:
-                    score += 950.0
-                    reasons.append("POWER_REQUIRED_FOR_EVOLUTION")
-                else:
-                    score += 350.0
-                    reasons.append("power_additional_damage")
-
-            # 5. SECONDARY EVOLUTION PAIRS
-            # Flamethrower + Reflexes -> Overheat
             elif "flamethrower" in name:
                 flame_lvl = self.acquired_moves.get("flamethrower", 0)
                 if flame_lvl < 5:
@@ -329,77 +343,75 @@ class UpgradePolicy:
                 else:
                     score += 80.0
                     reasons.append("flamethrower_already_max_lv5")
-            elif "reflexes" in name or "cooldown" in desc:
-                if ("flamethrower" in self.acquired_moves or "shadow ball" in self.acquired_moves) and not has_reflexes:
-                    score += 920.0
-                    reasons.append("REFLEXES_REQUIRED_FOR_EVOLUTION")
-                else:
-                    score += 400.0
-                    reasons.append("reflexes_cooldown_reduction")
 
-            # Fire Spin + Synthesis -> Sacred Fire
-            elif "fire spin" in name:
-                score += 700.0
-                reasons.append("FIRE_SPIN_ORBIT_SHIELD")
-            elif "synthesis" in name or "regen" in desc:
-                if "fire spin" in self.acquired_moves and not has_synthesis:
-                    score += 680.0
-                    reasons.append("SYNTHESIS_REQUIRED_FOR_SACRED_FIRE")
-                else:
-                    score += 320.0
-                    reasons.append("synthesis_hp_regen")
+            # 7. UPGRADE OWNED MOVES THAT CAN STILL EVOLVE
+            elif any(m in name for m in self.acquired_moves if self.acquired_moves[m] < 5):
+                matching_m = next(m for m in self.acquired_moves if m in name)
+                c_lvl = self.acquired_moves[matching_m]
+                score += 650.0 + (c_lvl * 40.0)
+                reasons.append(f"UPGRADE_{matching_m.upper()}_TOWARD_EVOLUTION(cur={c_lvl}/5)")
 
-            # Tackle + Vigor -> Take Down
-            elif "tackle" in name:
-                score += 650.0
-                reasons.append("TACKLE_KNOCKBACK")
-            elif "vigor" in name or "max hp" in desc:
-                if "tackle" in self.acquired_moves and not has_vigor:
-                    score += 630.0
-                    reasons.append("VIGOR_REQUIRED_FOR_TAKE_DOWN")
-                else:
-                    score += 280.0
-                    reasons.append("vigor_max_hp_boost")
-
-            # Aqua Ring & Other crowd-clear moves
-            elif "aqua ring" in name:
-                score += 780.0
-                reasons.append("AQUA_RING_REGEN_TANK")
-            elif "will-o-wisp" in name or "heat wave" in name or "swift" in name:
-                score += 550.0
-                reasons.append("AOE_CROWD_CLEAR")
-
-            # 6. MOBILITY & ECONOMY PASSIVE STATS (Fast leveling engine)
-            elif "magnet" in name or "pickup" in desc:
-                score += 880.0
-                reasons.append("MAGNET_EXP_VACUUM_PRIORITY")
-            elif "learning" in name or "experience" in desc:
-                score += 830.0
-                reasons.append("LEARNING_XP_MULTIPLIER")
-            elif "sprint" in name or "movement speed" in desc:
-                score += 800.0
-                reasons.append("SPRINT_CRITICAL_KITING_SPEED")
+            # 8. DEFENSIVE ARMOR PASSIVE (Up to 12-20 cap)
             elif "armor" in name or "defense" in desc:
-                score += 350.0
-                reasons.append("ARMOR_DAMAGE_REDUCTION")
+                armor_count = self.acquired_stats.count("armor")
+                if armor_count < 12:
+                    score += 570.0
+                    reasons.append(f"ARMOR_DEFENSE_REDUCTION_UNTIL_CAP(cur={armor_count}/12)")
+                else:
+                    score += 350.0
+                    reasons.append("armor_defense_capped")
 
-            # 7. BUFF MOVES (Swords Dance / Nasty Plot / Harden)
+            # 9. ESSENTIAL STAT PASSIVES (BoundlessEgret Meta Tier)
+            elif "power" in name:
+                score += 560.0
+                reasons.append("POWER_ATTACK_DAMAGE_TIER1")
+            elif "reflexes" in name or "cooldown" in desc:
+                score += 555.0
+                reasons.append("REFLEXES_COOLDOWN_TIER1")
+            elif "focus" in name or "sniper" in name or "crit" in desc:
+                score += 550.0
+                reasons.append("FOCUS_CRIT_TIER2")
+            elif "vigor" in name or "max hp" in desc:
+                score += 540.0
+                reasons.append("VIGOR_MAX_HP_TIER2")
+            elif "synthesis" in name or "regen" in desc:
+                score += 535.0
+                reasons.append("SYNTHESIS_REGEN_TIER2")
+            elif "learning" in name or "experience" in desc:
+                score += 530.0
+                reasons.append("LEARNING_XP_MULTIPLIER_TIER3")
+            elif "magnet" in name or "pickup" in desc:
+                score += 525.0
+                reasons.append("MAGNET_EXP_VACUUM_TIER3")
+            elif "sprint" in name or "movement speed" in desc:
+                score += 515.0
+                reasons.append("SPRINT_KITING_SPEED_TIER3")
+
+            # 10. BUFF MOVES (Swords Dance / Nasty Plot / Harden)
             elif any(b in name for b in self.buff_moves):
                 if len(self.acquired_moves) >= 2:
-                    score += 300.0
+                    score += 480.0
                     reasons.append("BUFF_MOVE_SYNERGY")
                 else:
                     score += 80.0
                     reasons.append("defer_buff_until_attacks_ready")
 
-            # 8. LEARNED VALUE NETWORK BONUS
+            # 11. GENERAL ATTACK MOVES
+            elif any(m in name for m in self.priority_moves):
+                score += 450.0
+                reasons.append("PRIORITY_NEW_ATTACK")
+            else:
+                score += 430.0
+                reasons.append("general_card_upgrade")
+
+            # 12. LEARNED VALUE NETWORK BONUS
             learned_r = self.skill_ratings.get(name, 0.0)
             if learned_r > 0:
                 learned_bonus = learned_r * 40.0
                 score += learned_bonus
                 reasons.append(f"LEARNED_VALUE(+{learned_bonus:.0f})")
 
-            # 9. RARITY TIERS
+            # 13. RARITY TIERS
             if "legendary" in tag:
                 score += 60.0
                 reasons.append("legendary")
@@ -416,21 +428,54 @@ class UpgradePolicy:
         best_card, best_score, best_reason = scored_cards[0]
         best_card["selection_score"] = best_score
         best_card["selection_reason"] = best_reason or "meta_priority"
+        best_card["should_reroll"] = bool(best_score < 500.0)
 
         # Update acquired moves & stats
         card_name = best_card.get("name", "").strip().lower()
-        matched_move = False
-        for p_move in self.priority_moves:
-            if p_move in card_name:
-                self.acquired_moves[p_move] = self.acquired_moves.get(p_move, 1) + 1
-                matched_move = True
-                break
-
-        if not matched_move:
-            for p_stat in self.priority_stats:
-                if p_stat in card_name:
-                    if p_stat not in self.acquired_stats:
-                        self.acquired_stats.append(p_stat)
-                    break
+        self._record_acquisition(card_name)
 
         return best_card
+
+    def _is_required_passive_for_owned_moves(self, card_name: str) -> bool:
+        """Checks if card_name is the required evolution passive for ANY currently owned move."""
+        matched_m, req_p = self._get_required_passive_context(card_name)
+        return bool(matched_m and req_p)
+
+    def _get_required_passive_context(self, card_name: str) -> Tuple[str, str]:
+        """Returns (owned_move_name, required_passive_name) if card_name satisfies evolution prerequisite."""
+        c_name = card_name.lower()
+        for owned_m in self.acquired_moves.keys():
+            evo_info = self.evolutions_db.get(owned_m.lower())
+            if evo_info and evo_info.get("requires_passive"):
+                req_p = evo_info["requires_passive"].lower()
+                if req_p in c_name and req_p not in [s.lower() for s in self.acquired_stats]:
+                    return owned_m, evo_info["requires_passive"]
+        return "", ""
+
+    def _record_acquisition(self, card_name: str):
+        """Records acquired card into acquired_moves or acquired_stats."""
+        c_name = card_name.lower().strip()
+        # Clean evolution arrow if present
+        if "→" in c_name:
+            c_name = c_name.split("→")[-1].strip()
+        elif "->" in c_name:
+            c_name = c_name.split("->")[-1].strip()
+
+        # Check if known move in database
+        evo_info = self.evolutions_db.get(c_name)
+        is_known_move = evo_info and (evo_info.get("kind") is not None or evo_info.get("buff_stat") is not None)
+        
+        if is_known_move or any(p in c_name for p in self.priority_moves) or any(b in c_name for b in self.buff_moves):
+            # Key under primary move name
+            matched_key = c_name
+            for m in list(self.acquired_moves.keys()) + self.priority_moves:
+                if m in c_name:
+                    matched_key = m
+                    break
+            self.acquired_moves[matched_key] = self.acquired_moves.get(matched_key, 1) + 1
+        else:
+            # Check if stat passive
+            for s in ["power", "reflexes", "focus", "sniper", "vigor", "synthesis", "learning", "magnet", "sprint", "armor"]:
+                if s in c_name:
+                    self.acquired_stats.append(s)
+                    break

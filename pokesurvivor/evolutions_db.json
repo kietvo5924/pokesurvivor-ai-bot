@@ -1,0 +1,1458 @@
+{
+  "collection": {
+    "id": "collection",
+    "name": "Collection",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "survival": {
+    "id": "survival",
+    "name": "Survival",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "combat": {
+    "id": "combat",
+    "name": "Combat",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "rifts": {
+    "id": "rifts",
+    "name": "Rifts",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "legendaries": {
+    "id": "legendaries",
+    "name": "Legendaries",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "missions & more": {
+    "id": "other",
+    "name": "Missions & more",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "shady forest": {
+    "id": "shady-forest",
+    "name": "Shady Forest",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "crystal cave": {
+    "id": "crystal-cave",
+    "name": "Crystal Cave",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "ash volcano": {
+    "id": "ash-volcano",
+    "name": "Ash Volcano",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "haunted hollow": {
+    "id": "halloween",
+    "name": "Haunted Hollow",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "halloween 2026": {
+    "id": "halloween-2026",
+    "name": "Halloween 2026",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "leftovers": {
+    "id": "leftovers",
+    "name": "Leftovers",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "choice band": {
+    "id": "choice-band",
+    "name": "Choice Band",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "quick claw": {
+    "id": "quick-claw",
+    "name": "Quick Claw",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "focus sash": {
+    "id": "focus-sash",
+    "name": "Focus Sash",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "shell bell": {
+    "id": "shell-bell",
+    "name": "Shell Bell",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "amulet coin": {
+    "id": "amulet-coin",
+    "name": "Amulet Coin",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "lucky egg": {
+    "id": "lucky-egg",
+    "name": "Lucky Egg",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "life orb": {
+    "id": "life-orb",
+    "name": "Life Orb",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "choice scarf": {
+    "id": "choice-scarf",
+    "name": "Choice Scarf",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "rocky helmet": {
+    "id": "rocky-helmet",
+    "name": "Rocky Helmet",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "assault vest": {
+    "id": "assault-vest",
+    "name": "Assault Vest",
+    "kind": "mega",
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "judgment": {
+    "id": "judgment",
+    "name": "Judgment",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "tackle": {
+    "id": "tackle",
+    "name": "Tackle",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "quick attack": {
+    "id": "quick-attack",
+    "name": "Quick Attack",
+    "kind": "dash",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "swords dance": {
+    "id": "swords-dance",
+    "name": "Swords Dance",
+    "kind": "buff",
+    "buff_stat": "attack",
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "agility": {
+    "id": "agility",
+    "name": "Agility",
+    "kind": "buff",
+    "buff_stat": "speed",
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "harden": {
+    "id": "harden",
+    "name": "Harden",
+    "kind": "buff",
+    "buff_stat": "defense",
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "ember": {
+    "id": "ember",
+    "name": "Ember",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "flamethrower": {
+    "id": "flamethrower",
+    "name": "Flamethrower",
+    "kind": "cone",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "fire spin": {
+    "id": "fire-spin",
+    "name": "Fire Spin",
+    "kind": "orbit",
+    "buff_stat": null,
+    "requires_id": "regen",
+    "requires_passive": "Synthesis"
+  },
+  "heat wave": {
+    "id": "heat-wave",
+    "name": "Heat Wave",
+    "kind": "nova",
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "water gun": {
+    "id": "water-gun",
+    "name": "Water Gun",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "bubble": {
+    "id": "bubble",
+    "name": "Bubble",
+    "kind": "nova",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "hydro pump": {
+    "id": "hydro-pump",
+    "name": "Hydro Pump",
+    "kind": "beam",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "aqua ring": {
+    "id": "aqua-ring",
+    "name": "Aqua Ring",
+    "kind": "buff",
+    "buff_stat": "regen",
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "vine whip": {
+    "id": "vine-whip",
+    "name": "Vine Whip",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "razor leaf": {
+    "id": "razor-leaf",
+    "name": "Razor Leaf",
+    "kind": "boomerang",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "petal blizzard": {
+    "id": "petal-blizzard",
+    "name": "Petal Blizzard",
+    "kind": "orbit",
+    "buff_stat": null,
+    "requires_id": "regen",
+    "requires_passive": "Synthesis"
+  },
+  "grass knot": {
+    "id": "grass-knot",
+    "name": "Grass Knot",
+    "kind": "aura",
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "thunder shock": {
+    "id": "thunder-shock",
+    "name": "Thunder Shock",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "discharge": {
+    "id": "discharge",
+    "name": "Discharge",
+    "kind": "aura",
+    "buff_stat": null,
+    "requires_id": "defense",
+    "requires_passive": "Armor"
+  },
+  "thunderbolt": {
+    "id": "thunderbolt",
+    "name": "Thunderbolt",
+    "kind": "chain",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "confusion": {
+    "id": "confusion",
+    "name": "Confusion",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "psybeam": {
+    "id": "psybeam",
+    "name": "Psybeam",
+    "kind": "beam",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "psychic": {
+    "id": "psychic",
+    "name": "Psychic",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "sludge": {
+    "id": "sludge",
+    "name": "Sludge",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "mud shot": {
+    "id": "mud-shot",
+    "name": "Mud Shot",
+    "kind": "nova",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "gust": {
+    "id": "gust",
+    "name": "Gust",
+    "kind": "orbit",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "wing attack": {
+    "id": "wing-attack",
+    "name": "Wing Attack",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "body slam": {
+    "id": "body-slam",
+    "name": "Body Slam",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "hyper voice": {
+    "id": "hyper-voice",
+    "name": "Hyper Voice",
+    "kind": "nova",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "poison sting": {
+    "id": "poison-sting",
+    "name": "Poison Sting",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "toxic": {
+    "id": "toxic",
+    "name": "Toxic",
+    "kind": "trail",
+    "buff_stat": null,
+    "requires_id": "regen",
+    "requires_passive": "Synthesis"
+  },
+  "bulldoze": {
+    "id": "bulldoze",
+    "name": "Bulldoze",
+    "kind": "aura",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "bug bite": {
+    "id": "bug-bite",
+    "name": "Bug Bite",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "string shot": {
+    "id": "string-shot",
+    "name": "String Shot",
+    "kind": "mine",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "bug buzz": {
+    "id": "bug-buzz",
+    "name": "Bug Buzz",
+    "kind": "aura",
+    "buff_stat": null,
+    "requires_id": "regen",
+    "requires_passive": "Synthesis"
+  },
+  "rock throw": {
+    "id": "rock-throw",
+    "name": "Rock Throw",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "rock slide": {
+    "id": "rock-slide",
+    "name": "Rock Slide",
+    "kind": "meteor",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "ice beam": {
+    "id": "ice-beam",
+    "name": "Ice Beam",
+    "kind": "beam",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "powder snow": {
+    "id": "powder-snow",
+    "name": "Powder Snow",
+    "kind": "aura",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "karate chop": {
+    "id": "karate-chop",
+    "name": "Karate Chop",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "aura sphere": {
+    "id": "aura-sphere",
+    "name": "Aura Sphere",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "lick": {
+    "id": "lick",
+    "name": "Lick",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "shadow ball": {
+    "id": "shadow-ball",
+    "name": "Shadow Ball",
+    "kind": "projectile",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "dragon rage": {
+    "id": "dragon-rage",
+    "name": "Dragon Rage",
+    "kind": "beam",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "dragon dance": {
+    "id": "dragon-dance",
+    "name": "Dragon Dance",
+    "kind": "buff",
+    "buff_stat": "attack",
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "dragon pulse": {
+    "id": "dragon-pulse",
+    "name": "Dragon Pulse",
+    "kind": "nova",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "fairy wind": {
+    "id": "fairy-wind",
+    "name": "Fairy Wind",
+    "kind": "nova",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "dazzling gleam": {
+    "id": "dazzling-gleam",
+    "name": "Dazzling Gleam",
+    "kind": "aura",
+    "buff_stat": null,
+    "requires_id": "regen",
+    "requires_passive": "Synthesis"
+  },
+  "metal claw": {
+    "id": "metal-claw",
+    "name": "Metal Claw",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "flash cannon": {
+    "id": "flash-cannon",
+    "name": "Flash Cannon",
+    "kind": "beam",
+    "buff_stat": null,
+    "requires_id": "defense",
+    "requires_passive": "Armor"
+  },
+  "bite": {
+    "id": "bite",
+    "name": "Bite",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "dark pulse": {
+    "id": "dark-pulse",
+    "name": "Dark Pulse",
+    "kind": "nova",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "night shade": {
+    "id": "night-shade",
+    "name": "Night Shade",
+    "kind": "aura",
+    "buff_stat": null,
+    "requires_id": "regen",
+    "requires_passive": "Synthesis"
+  },
+  "bonemerang": {
+    "id": "bonemerang",
+    "name": "Bonemerang",
+    "kind": "boomerang",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "psycho cut": {
+    "id": "psycho-cut",
+    "name": "Psycho Cut",
+    "kind": "boomerang",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "spikes": {
+    "id": "spikes",
+    "name": "Spikes",
+    "kind": "mine",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "toxic spikes": {
+    "id": "toxic-spikes",
+    "name": "Toxic Spikes",
+    "kind": "mine",
+    "buff_stat": null,
+    "requires_id": "regen",
+    "requires_passive": "Synthesis"
+  },
+  "hail": {
+    "id": "hail",
+    "name": "Hail",
+    "kind": "meteor",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "meteor mash": {
+    "id": "meteor-mash",
+    "name": "Meteor Mash",
+    "kind": "meteor",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "will-o-wisp": {
+    "id": "will-o-wisp",
+    "name": "Will-O-Wisp",
+    "kind": "turret",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "substitute": {
+    "id": "substitute",
+    "name": "Substitute",
+    "kind": "turret",
+    "buff_stat": null,
+    "requires_id": "defense",
+    "requires_passive": "Armor"
+  },
+  "aerial ace": {
+    "id": "aerial-ace",
+    "name": "Aerial Ace",
+    "kind": "dash",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "flame wheel": {
+    "id": "flame-wheel",
+    "name": "Flame Wheel",
+    "kind": "trail",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "bubble beam": {
+    "id": "bubble-beam",
+    "name": "Bubble Beam",
+    "kind": "cone",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "hex": {
+    "id": "hex",
+    "name": "Hex",
+    "kind": "chain",
+    "buff_stat": null,
+    "requires_id": "magnet",
+    "requires_passive": "Magnet"
+  },
+  "air slash": {
+    "id": "air-slash",
+    "name": "Air Slash",
+    "kind": "homing",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "electro ball": {
+    "id": "electro-ball",
+    "name": "Electro Ball",
+    "kind": "bounce",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "hyper beam": {
+    "id": "hyper-beam",
+    "name": "Hyper Beam",
+    "kind": "charge",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "solar beam": {
+    "id": "solar-beam",
+    "name": "Solar Beam",
+    "kind": "charge",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "rollout": {
+    "id": "rollout",
+    "name": "Rollout",
+    "kind": "spin",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "magnitude": {
+    "id": "magnitude",
+    "name": "Magnitude",
+    "kind": "quake",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "twister": {
+    "id": "twister",
+    "name": "Twister",
+    "kind": "vortex",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "vacuum wave": {
+    "id": "vacuum-wave",
+    "name": "Vacuum Wave",
+    "kind": "shove",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "thunder wave": {
+    "id": "thunder-wave",
+    "name": "Thunder Wave",
+    "kind": "stun",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "draining kiss": {
+    "id": "draining-kiss",
+    "name": "Draining Kiss",
+    "kind": "homing",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "ice shard": {
+    "id": "ice-shard",
+    "name": "Ice Shard",
+    "kind": "homing",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "shadow sneak": {
+    "id": "shadow-sneak",
+    "name": "Shadow Sneak",
+    "kind": "homing",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "sucker punch": {
+    "id": "sucker-punch",
+    "name": "Sucker Punch",
+    "kind": "homing",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "power gem": {
+    "id": "power-gem",
+    "name": "Power Gem",
+    "kind": "bounce",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "signal beam": {
+    "id": "signal-beam",
+    "name": "Signal Beam",
+    "kind": "bounce",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "mirror shot": {
+    "id": "mirror-shot",
+    "name": "Mirror Shot",
+    "kind": "bounce",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "rolling kick": {
+    "id": "rolling-kick",
+    "name": "Rolling Kick",
+    "kind": "spin",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "play rough": {
+    "id": "play-rough",
+    "name": "Play Rough",
+    "kind": "spin",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "fury cutter": {
+    "id": "fury-cutter",
+    "name": "Fury Cutter",
+    "kind": "spin",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "outrage": {
+    "id": "outrage",
+    "name": "Outrage",
+    "kind": "spin",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "gyro ball": {
+    "id": "gyro-ball",
+    "name": "Gyro Ball",
+    "kind": "spin",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "ominous wind": {
+    "id": "ominous-wind",
+    "name": "Ominous Wind",
+    "kind": "vortex",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "disarming voice": {
+    "id": "disarming-voice",
+    "name": "Disarming Voice",
+    "kind": "shove",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "whirlwind": {
+    "id": "whirlwind",
+    "name": "Whirlwind",
+    "kind": "shove",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "parting shot": {
+    "id": "parting-shot",
+    "name": "Parting Shot",
+    "kind": "shove",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "rock tomb": {
+    "id": "rock-tomb",
+    "name": "Rock Tomb",
+    "kind": "stun",
+    "buff_stat": null,
+    "requires_id": "attack",
+    "requires_passive": "Power"
+  },
+  "dynamic punch": {
+    "id": "dynamic-punch",
+    "name": "Dynamic Punch",
+    "kind": "stun",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "freeze-dry": {
+    "id": "freeze-dry",
+    "name": "Freeze-Dry",
+    "kind": "stun",
+    "buff_stat": null,
+    "requires_id": "cooldown",
+    "requires_passive": "Reflexes"
+  },
+  "iron head": {
+    "id": "iron-head",
+    "name": "Iron Head",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": "defense",
+    "requires_passive": "Armor"
+  },
+  "behemoth blade": {
+    "id": "behemoth-blade",
+    "name": "Behemoth Blade",
+    "kind": "melee",
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "behemoth bash": {
+    "id": "behemoth-bash",
+    "name": "Behemoth Bash",
+    "kind": "shove",
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "glaciate": {
+    "id": "glaciate",
+    "name": "Glaciate",
+    "kind": "cone",
+    "buff_stat": null,
+    "requires_id": "speed",
+    "requires_passive": "Sprint"
+  },
+  "freeze shock": {
+    "id": "freeze-shock",
+    "name": "Freeze Shock",
+    "kind": "charge",
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "ice burn": {
+    "id": "ice-burn",
+    "name": "Ice Burn",
+    "kind": "charge",
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "blank plate": {
+    "id": "blank-plate",
+    "name": "Blank Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "flame plate": {
+    "id": "flame-plate",
+    "name": "Flame Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "splash plate": {
+    "id": "splash-plate",
+    "name": "Splash Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "meadow plate": {
+    "id": "meadow-plate",
+    "name": "Meadow Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "zap plate": {
+    "id": "zap-plate",
+    "name": "Zap Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "icicle plate": {
+    "id": "icicle-plate",
+    "name": "Icicle Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "fist plate": {
+    "id": "fist-plate",
+    "name": "Fist Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "toxic plate": {
+    "id": "toxic-plate",
+    "name": "Toxic Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "earth plate": {
+    "id": "earth-plate",
+    "name": "Earth Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "sky plate": {
+    "id": "sky-plate",
+    "name": "Sky Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "mind plate": {
+    "id": "mind-plate",
+    "name": "Mind Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "insect plate": {
+    "id": "insect-plate",
+    "name": "Insect Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "stone plate": {
+    "id": "stone-plate",
+    "name": "Stone Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "spooky plate": {
+    "id": "spooky-plate",
+    "name": "Spooky Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "draco plate": {
+    "id": "draco-plate",
+    "name": "Draco Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "dread plate": {
+    "id": "dread-plate",
+    "name": "Dread Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "iron plate": {
+    "id": "iron-plate",
+    "name": "Iron Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "pixie plate": {
+    "id": "pixie-plate",
+    "name": "Pixie Plate",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "brave": {
+    "id": "brave",
+    "name": "Brave",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "impulsive": {
+    "id": "impulsive",
+    "name": "Impulsive",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "cautious": {
+    "id": "cautious",
+    "name": "Cautious",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "loyal": {
+    "id": "loyal",
+    "name": "Loyal",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "patient": {
+    "id": "patient",
+    "name": "Patient",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "gentle": {
+    "id": "gentle",
+    "name": "Gentle",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "timid": {
+    "id": "timid",
+    "name": "Timid",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "mischievous": {
+    "id": "mischievous",
+    "name": "Mischievous",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "serene": {
+    "id": "serene",
+    "name": "Serene",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "clever": {
+    "id": "clever",
+    "name": "Clever",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "cheerful": {
+    "id": "cheerful",
+    "name": "Cheerful",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "tenacious": {
+    "id": "tenacious",
+    "name": "Tenacious",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "proud": {
+    "id": "proud",
+    "name": "Proud",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "lone wolf": {
+    "id": "lone-wolf",
+    "name": "Lone Wolf",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "relaxed": {
+    "id": "relaxed",
+    "name": "Relaxed",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "chaotic": {
+    "id": "chaotic",
+    "name": "Chaotic",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "normal": {
+    "id": "normal",
+    "name": "Normal",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "fire": {
+    "id": "fire",
+    "name": "Fire",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "water": {
+    "id": "water",
+    "name": "Water",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "grass": {
+    "id": "grass",
+    "name": "Grass",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "electric": {
+    "id": "electric",
+    "name": "Electric",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "ice": {
+    "id": "ice",
+    "name": "Ice",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "fighting": {
+    "id": "fighting",
+    "name": "Fighting",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "poison": {
+    "id": "poison",
+    "name": "Poison",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "ground": {
+    "id": "ground",
+    "name": "Ground",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "flying": {
+    "id": "flying",
+    "name": "Flying",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "bug": {
+    "id": "bug",
+    "name": "Bug",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "rock": {
+    "id": "rock",
+    "name": "Rock",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "ghost": {
+    "id": "ghost",
+    "name": "Ghost",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "dragon": {
+    "id": "dragon",
+    "name": "Dragon",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "dark": {
+    "id": "dark",
+    "name": "Dark",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "steel": {
+    "id": "steel",
+    "name": "Steel",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "fairy": {
+    "id": "fairy",
+    "name": "Fairy",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "harsh sunlight": {
+    "id": "sun",
+    "name": "Harsh sunlight",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "rain": {
+    "id": "rain",
+    "name": "Rain",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "sandstorm": {
+    "id": "sand",
+    "name": "Sandstorm",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "snowfall": {
+    "id": "snow",
+    "name": "Snowfall",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "fog": {
+    "id": "fog",
+    "name": "Fog",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "fury": {
+    "id": "fury",
+    "name": "Fury",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "lightning": {
+    "id": "lightning",
+    "name": "Lightning",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "magnet": {
+    "id": "magnet",
+    "name": "Magnet",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  },
+  "haste": {
+    "id": "haste",
+    "name": "Haste",
+    "kind": null,
+    "buff_stat": null,
+    "requires_id": null,
+    "requires_passive": null
+  }
+}

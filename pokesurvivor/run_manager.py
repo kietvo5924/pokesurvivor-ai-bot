@@ -211,6 +211,10 @@ class RunManager:
         last_dodge_log_time = 0.0
         last_buffer_log_time = 0.0
         last_overlay_time = 0.0
+        last_slot_cycle_time = 0.0
+        last_zmove_time = 0.0
+        last_consumable_time = 0.0
+        has_rerolled_this_choice = False
         vision_state = None
         dom_results = None
 
@@ -264,6 +268,27 @@ class RunManager:
                         modal_kind=modal_kind
                     )
                     if best_card:
+                        # Reroll if card score is below viable threshold (< 500) and reroll is available
+                        if best_card.get("should_reroll") and not has_rerolled_this_choice and not self.observe_only and not self.is_paused:
+                            try:
+                                reroll_avail = self.browser_ctrl.page.evaluate('''() => {
+                                    const rr = document.querySelector('[data-testid="reroll"]');
+                                    if (rr && !rr.disabled && rr.offsetParent !== null) {
+                                        const m = rr.innerText.match(/\\((\\d+)\\)/);
+                                        return (!m || parseInt(m[1]) > 0);
+                                    }
+                                    return false;
+                                }''')
+                                if reroll_avail:
+                                    print(f"  -> Thẻ điểm thấp (< 500) và có Reroll khả dụng: Bấm Reroll (phím 'r')!")
+                                    self.browser_ctrl.press_key("r")
+                                    has_rerolled_this_choice = True
+                                    time.sleep(0.5)
+                                    continue
+                            except Exception:
+                                pass
+
+                        has_rerolled_this_choice = False
                         print(f"  -> Bot chọn: '{best_card.get('name')}' ({best_card.get('tag')}) - Lý do: {best_card.get('selection_reason')}")
                         if not self.observe_only and not self.is_paused:
                             # Try clicking selector and pressing number key
@@ -376,6 +401,29 @@ class RunManager:
                         if k not in active_keys:
                             self.browser_ctrl.key_down(k)
                     active_keys = target_keys
+
+            # 6b. Active Combat Actions (Weapon slot cycling, Emergency Z-Move, Consumables)
+            if not self.observe_only and not self.is_paused and phase == "running":
+                # A. Weapon slot cycling ('e'): only active slot fires in PokéSurvivor; cycling every 0.22s unlocks all owned weapons!
+                if now_t - last_slot_cycle_time >= 0.22:
+                    self.browser_ctrl.press_key("e")
+                    last_slot_cycle_time = now_t
+
+                # B. Emergency Z-Move ('f'): triggers 400px screen-wide burst when critically low HP or surrounded
+                if now_t - last_zmove_time >= 4.0 and vision_state:
+                    hp_r = vision_state.get("hp_ratio")
+                    is_crit_hp = (hp_r is not None and hp_r < 0.40)
+                    is_heavy_encircled = vision_state.get("is_encircled", False)
+                    n_close_mobs = len([e for e in vision_state.get("enemies", []) if e.get("dist", 999.0) < 180.0])
+                    if is_crit_hp or is_heavy_encircled or n_close_mobs >= 8:
+                        self.browser_ctrl.press_key("f")
+                        last_zmove_time = now_t
+
+                # C. Field consumables auto-use (keys 5-8): uses orbs/potions/berries in hotbar
+                if now_t - last_consumable_time >= 2.0:
+                    for k in ["5", "6", "7", "8"]:
+                        self.browser_ctrl.press_key(k)
+                    last_consumable_time = now_t
 
             # Throttle loop to ~25 FPS to maintain responsive control
             processing_time = time.time() - loop_start
