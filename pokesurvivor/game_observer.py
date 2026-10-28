@@ -102,7 +102,19 @@ class GameObserver:
                 const activeScreen = screensEl ? screensEl.getAttribute('data-screen') : 'unknown';
 
                 const phaseEl = document.querySelector('[data-testid="game-phase"]');
-                const phase = phaseEl ? phaseEl.innerText.trim() : 'none';
+                let phase = phaseEl ? phaseEl.innerText.trim() : 'none';
+                if ((phase === 'none' || !phase) && activeScreen === 'game') {
+                    phase = 'running';
+                }
+                if (phase === 'none' || !phase) {
+                    if (typeof window !== 'undefined' && window.G && window.G.gState && window.G.gState.gameState) {
+                        const gState = String(window.G.gState.gameState).toLowerCase();
+                        if (['running', 'play', 'playing', 'battle'].includes(gState)) phase = 'running';
+                        else if (['gameover', 'ended', 'death', 'victory'].includes(gState)) phase = 'ended';
+                        else if (['choice', 'levelup', 'pause', 'paused'].includes(gState)) phase = 'choice';
+                        else phase = gState;
+                    }
+                }
 
                 const choiceEl = document.querySelector('[data-testid="choice"]');
                 const choiceOpen = choiceEl ? !choiceEl.classList.contains('hidden') : false;

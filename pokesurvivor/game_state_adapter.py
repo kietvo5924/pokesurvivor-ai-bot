@@ -181,6 +181,7 @@ class GameStateAdapter:
             "sector_enemy_counts": entities.get("sector_enemy_counts", {}),
             "sector_obstacles": entities.get("terrain", {}).get("sector_obstacles", {}),
             "sector_obs_costs": entities.get("terrain", {}).get("sector_obs_costs", {}),
+            "terrain_status": entities.get("terrain", {}).get("status", "unobserved"),
             "min_enemy_dist": entities.get("min_enemy_dist", 9999.0),
             "nearest_enemy_sector": entities.get("nearest_enemy_sector"),
             "swarm_center": entities.get("swarm_center"),
@@ -283,8 +284,33 @@ class GameStateAdapter:
                             pickups: getList(pickupMgr).slice(0, 30).map(p => ({
                                 x: p.x, y: p.y, kind: p.kind
                             })),
-                            rift: (riftMgr && riftMgr.rift) ? { x: riftMgr.rift.x, y: riftMgr.rift.y, inArena: !!riftMgr.inArena } : null,
-                            mapBounds: mapBounds
+                            rift: (riftMgr && riftMgr.rift) ? { x: riftMgr.rift.x, y: riftMgr.rift.y, inArena: !!riftMgr.inArena, source: "window_G" } : null,
+                            mapBounds: mapBounds,
+                            specials: (() => {
+                                const objMgr = G.Objects || (G.Game ? G.Game.Objects : null) || (container ? container.Objects : null);
+                                const allItems = getList(pickupMgr).concat(getList(objMgr));
+                                let springObj = null;
+                                let altarObj = null;
+                                let chestObj = null;
+
+                                for (const it of allItems) {
+                                    if (!it || it.dead) continue;
+                                    const k = String(it.kind || it.type || '').toLowerCase();
+                                    if (k.includes('spring') && !springObj) {
+                                        springObj = { x: it.x, y: it.y, source: "window_G", kind: "spring" };
+                                    } else if ((k.includes('altar') || k.includes('shrine')) && !altarObj) {
+                                        altarObj = { x: it.x, y: it.y, source: "window_G", kind: "altar" };
+                                    } else if (k.includes('chest') && !chestObj) {
+                                        chestObj = { x: it.x, y: it.y, source: "window_G", kind: "chest" };
+                                    }
+                                }
+                                return {
+                                    rift: (riftMgr && riftMgr.rift) ? { x: riftMgr.rift.x, y: riftMgr.rift.y, inArena: !!riftMgr.inArena, source: "window_G" } : null,
+                                    spring: springObj,
+                                    altar: altarObj,
+                                    chest: chestObj
+                                };
+                            })()
                         };
                     } catch(e) {}
                 }
@@ -312,7 +338,10 @@ class GameStateAdapter:
                     const screensEl = document.querySelector('main.screens');
                     const activeScreen = screensEl ? screensEl.getAttribute('data-screen') : 'unknown';
                     const phaseEl = document.querySelector('[data-testid="game-phase"]');
-                    const phase = phaseEl ? phaseEl.innerText.trim() : 'none';
+                    let phase = phaseEl ? phaseEl.innerText.trim() : 'none';
+                    if ((phase === 'none' || !phase) && activeScreen === 'game') {
+                        phase = 'running';
+                    }
 
                     const choiceEl = document.querySelector('[data-testid="choice"]') || document.querySelector('.ps-choice:not(.hidden) .ps-box');
                     const choiceOpen = choiceEl ? (choiceEl.offsetParent !== null && !choiceEl.classList.contains('hidden')) : false;
@@ -548,6 +577,8 @@ class GameStateAdapter:
                     phase = "choice"
                 else:
                     phase = g_str
+            elif dom.get("activeScreen") == "game":
+                phase = "running"
 
         return {
             "phase": phase,
@@ -647,18 +678,29 @@ class GameStateAdapter:
         """Harmonizes entities and tactical metrics from window.G, canvas telemetry, and OpenCV."""
         g_state = browser_data.get("gState")
 
+        # Extract Camera Matrix (s = scale, e = translation x, f = translation y)
+        telemetry = browser_data.get("telemetry") or {}
+        cam = telemetry.get("camera") or {"s": 1.0, "e": 0.0, "f": 0.0}
+        s = max(0.01, float(cam.get("s", 1.0)))
+        e_cam = float(cam.get("e", 0.0))
+        f_cam = float(cam.get("f", 0.0))
+        px, py = float(player.get("world_x", 640.0)), float(player.get("world_y", 360.0))
+
         # Branch 1: Complete window.G available
         if g_state:
             enemies = []
-            px, py = player["world_x"], player["world_y"]
-            sector_enemy_counts = {s: 0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]}
+            sector_enemy_counts = {sec: 0 for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
             min_enemy_dist = 9999.0
             nearest_enemy_sec = None
             swarm_x, swarm_y, swarm_count = 0.0, 0.0, 0
 
             for e in g_state.get("enemies", []):
-                dx = e["x"] - px
-                dy = e["y"] - py
+                e_wx = float(e["x"])
+                e_wy = float(e["y"])
+                e_sx = s * e_wx + e_cam
+                e_sy = s * e_wy + f_cam
+                dx = e_wx - px
+                dy = e_wy - py
                 dist = math.hypot(dx, dy)
                 deg = math.degrees(math.atan2(dy, dx)) % 360
                 sector = self._angle_to_sector(deg)
@@ -668,13 +710,17 @@ class GameStateAdapter:
                     min_enemy_dist = dist
                     nearest_enemy_sec = sector
                 if dist < 340.0:
-                    swarm_x += e["x"]
-                    swarm_y += e["y"]
+                    swarm_x += e_wx
+                    swarm_y += e_wy
                     swarm_count += 1
 
                 enemies.append({
-                    "x": e["x"],
-                    "y": e["y"],
+                    "x": e_wx,
+                    "y": e_wy,
+                    "world_x": e_wx,
+                    "world_y": e_wy,
+                    "screen_x": e_sx,
+                    "screen_y": e_sy,
                     "dist": dist,
                     "sector": sector,
                     "radius": e.get("r", 16),
@@ -689,11 +735,10 @@ class GameStateAdapter:
 
             swarm_center = (swarm_x / swarm_count, swarm_y / swarm_count) if swarm_count > 0 else None
 
-            # Terrain calculation from map bounds (if available)
-            sector_obstacles = {s: False for s in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
-            sector_obs_costs = {s: 0.0 for s in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
+            # Terrain calculation from map bounds
+            wall_obstacles = {sec: False for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
+            wall_costs = {sec: 0.0 for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
             map_bounds = g_state.get("mapBounds")
-            terrain_source = "window_G_bounds" if map_bounds else "unobserved"
 
             if map_bounds:
                 min_x = float(map_bounds.get("minX", 0.0))
@@ -705,27 +750,59 @@ class GameStateAdapter:
                 if px - min_x < wall_buffer:
                     dist_to_wall = max(1.0, px - min_x)
                     cost = max(0.0, (wall_buffer - dist_to_wall) * 4.0)
-                    for s in ["W", "NW", "SW"]:
-                        sector_obstacles[s] = True
-                        sector_obs_costs[s] = max(sector_obs_costs[s], cost)
+                    for sec in ["W", "NW", "SW"]:
+                        wall_obstacles[sec] = True
+                        wall_costs[sec] = max(wall_costs[sec], cost)
                 if max_x - px < wall_buffer:
                     dist_to_wall = max(1.0, max_x - px)
                     cost = max(0.0, (wall_buffer - dist_to_wall) * 4.0)
-                    for s in ["E", "NE", "SE"]:
-                        sector_obstacles[s] = True
-                        sector_obs_costs[s] = max(sector_obs_costs[s], cost)
+                    for sec in ["E", "NE", "SE"]:
+                        wall_obstacles[sec] = True
+                        wall_costs[sec] = max(wall_costs[sec], cost)
                 if py - min_y < wall_buffer:
                     dist_to_wall = max(1.0, py - min_y)
                     cost = max(0.0, (wall_buffer - dist_to_wall) * 4.0)
-                    for s in ["N", "NW", "NE"]:
-                        sector_obstacles[s] = True
-                        sector_obs_costs[s] = max(sector_obs_costs[s], cost)
+                    for sec in ["N", "NW", "NE"]:
+                        wall_obstacles[sec] = True
+                        wall_costs[sec] = max(wall_costs[sec], cost)
                 if max_y - py < wall_buffer:
                     dist_to_wall = max(1.0, max_y - py)
                     cost = max(0.0, (wall_buffer - dist_to_wall) * 4.0)
-                    for s in ["S", "SW", "SE"]:
-                        sector_obstacles[s] = True
-                        sector_obs_costs[s] = max(sector_obs_costs[s], cost)
+                    for sec in ["S", "SW", "SE"]:
+                        wall_obstacles[sec] = True
+                        wall_costs[sec] = max(wall_costs[sec], cost)
+
+            # Check if frame_img is available to combine OpenCV terrain with map bounds
+            cv_obstacles = {}
+            cv_costs = {}
+            if frame_img is not None:
+                try:
+                    vis_aux = self.perception.analyze_frame(frame_img, is_moving=is_moving)
+                    cv_obstacles = vis_aux.get("sector_obstacles", {})
+                    cv_costs = vis_aux.get("sector_obs_costs", {})
+                except Exception:
+                    pass
+
+            if map_bounds and cv_obstacles:
+                sector_obstacles = {sec: wall_obstacles.get(sec, False) or cv_obstacles.get(sec, False) for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
+                sector_obs_costs = {sec: max(wall_costs.get(sec, 0.0), cv_costs.get(sec, 0.0)) for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
+                terrain_source = "hybrid_bounds_and_opencv"
+                terrain_status = "verified"
+            elif map_bounds:
+                sector_obstacles = wall_obstacles
+                sector_obs_costs = wall_costs
+                terrain_source = "window_G_bounds"
+                terrain_status = "bounds_only"
+            elif cv_obstacles:
+                sector_obstacles = cv_obstacles
+                sector_obs_costs = cv_costs
+                terrain_source = "opencv_terrain"
+                terrain_status = "local_view_only"
+            else:
+                sector_obstacles = {}
+                sector_obs_costs = {}
+                terrain_source = "unobserved"
+                terrain_status = "unobserved"
 
             hazards = []
             for z in g_state.get("hazards", []):
@@ -739,6 +816,10 @@ class GameStateAdapter:
                     "type": "telegraph",
                     "x": zx,
                     "y": zy,
+                    "world_x": zx,
+                    "world_y": zy,
+                    "screen_x": s * zx + e_cam,
+                    "screen_y": s * zy + f_cam,
                     "dist": z_dist,
                     "sector": z_sec,
                     "radius": z.get("r", 20),
@@ -776,6 +857,10 @@ class GameStateAdapter:
                     "type": "bullet",
                     "x": px_b,
                     "y": py_b,
+                    "world_x": px_b,
+                    "world_y": py_b,
+                    "screen_x": s * px_b + e_cam,
+                    "screen_y": s * py_b + f_cam,
                     "dist": p_dist,
                     "sector": p_sec,
                     "vx": vx,
@@ -788,28 +873,59 @@ class GameStateAdapter:
 
             items = []
             for it in g_state.get("pickups", []):
+                ix = float(it.get("x", 0.0))
+                iy = float(it.get("y", 0.0))
                 items.append({
-                    "x": it.get("x"),
-                    "y": it.get("y"),
-                    "dist": math.hypot(it.get("x", 0) - px, it.get("y", 0) - py),
+                    "x": ix,
+                    "y": iy,
+                    "world_x": ix,
+                    "world_y": iy,
+                    "screen_x": s * ix + e_cam,
+                    "screen_y": s * iy + f_cam,
+                    "dist": math.hypot(ix - px, iy - py),
                     "kind": it.get("kind", "xp"),
                     "source": "window_G"
                 })
 
+            # Genuine specials from window.G
+            raw_specials = g_state.get("specials") or {}
             specials = {
-                "rift": g_state.get("rift"),
+                "rift": None,
                 "spring": None,
                 "altar": None,
                 "chest": None
             }
+            if not raw_specials.get("rift") and g_state.get("rift"):
+                raw_specials["rift"] = g_state["rift"]
+
+            for k_spec in ["rift", "spring", "altar", "chest"]:
+                sp_item = raw_specials.get(k_spec)
+                if sp_item and isinstance(sp_item, dict):
+                    sp_x = sp_item.get("x")
+                    sp_y = sp_item.get("y")
+                    if sp_x is not None and sp_y is not None:
+                        sp_dist = math.hypot(float(sp_x) - px, float(sp_y) - py)
+                        sp_deg = math.degrees(math.atan2(float(sp_y) - py, float(sp_x) - px)) % 360
+                        sp_sec = self._angle_to_sector(sp_deg)
+                        specials[k_spec] = {
+                            **sp_item,
+                            "x": float(sp_x),
+                            "y": float(sp_y),
+                            "world_x": float(sp_x),
+                            "world_y": float(sp_y),
+                            "screen_x": s * float(sp_x) + e_cam,
+                            "screen_y": s * float(sp_y) + f_cam,
+                            "dist": sp_dist,
+                            "sector": sp_sec,
+                            "source": sp_item.get("source", "window_G")
+                        }
 
             close_threats = [e for e in enemies if e["dist"] < 175.0]
             is_encircled = len(close_threats) >= 7 and len({e["sector"] for e in close_threats}) >= 4
 
-            # Sector danger profiles from window.G
             sector_dangers = {}
-            for s, cnt in sector_enemy_counts.items():
-                sector_dangers[s] = cnt * 80.0
+            for sec, cnt in sector_enemy_counts.items():
+                sector_dangers[sec] = cnt * 80.0
 
             danger_level = "CRITICAL" if (min_enemy_dist < 120.0 or is_encircled) else (
                 "HIGH" if (min_enemy_dist < 200.0 or len(hazards) > 0) else (
@@ -826,7 +942,8 @@ class GameStateAdapter:
                 "terrain": {
                     "sector_obstacles": sector_obstacles,
                     "sector_obs_costs": sector_obs_costs,
-                    "source": terrain_source
+                    "source": terrain_source,
+                    "status": terrain_status
                 },
                 "sector_dangers": sector_dangers,
                 "sector_enemy_counts": sector_enemy_counts,
@@ -849,28 +966,155 @@ class GameStateAdapter:
         # Branch 2: OpenCV Visual Perception (Doofcraft & Generic Canvas)
         if frame_img is not None:
             vision = self.perception.analyze_frame(frame_img, is_moving=is_moving)
+            
+            # 1. Transform enemies to unified world coordinates
+            enemies = []
+            sector_enemy_counts = {sec: 0 for sec in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
+            min_enemy_dist = 9999.0
+            nearest_enemy_sec = None
+            swarm_wx, swarm_wy, swarm_count = 0.0, 0.0, 0
+
+            for e in vision.get("enemies", []):
+                xs = float(e.get("x", 640.0))
+                ys = float(e.get("y", 360.0))
+                wx = (xs - e_cam) / s
+                wy = (ys - f_cam) / s
+                dist_w = math.hypot(wx - px, wy - py)
+                deg_w = math.degrees(math.atan2(wy - py, wx - px)) % 360
+                sec_w = self._angle_to_sector(deg_w)
+                if sec_w in sector_enemy_counts:
+                    sector_enemy_counts[sec_w] += 1
+                if dist_w < min_enemy_dist:
+                    min_enemy_dist = dist_w
+                    nearest_enemy_sec = sec_w
+                if dist_w < (340.0 / s):
+                    swarm_wx += wx
+                    swarm_wy += wy
+                    swarm_count += 1
+
+                enemies.append({
+                    **e,
+                    "x": wx,
+                    "y": wy,
+                    "world_x": wx,
+                    "world_y": wy,
+                    "screen_x": xs,
+                    "screen_y": ys,
+                    "dist": dist_w,
+                    "sector": sec_w,
+                    "source": "opencv_perception"
+                })
+
+            swarm_center = (swarm_wx / swarm_count, swarm_wy / swarm_count) if swarm_count > 0 else None
+
+            # 2. Transform hazards
+            hazards = []
+            for h in vision.get("hazards", []):
+                xs = float(h.get("x", 640.0))
+                ys = float(h.get("y", 360.0))
+                wx = (xs - e_cam) / s
+                wy = (ys - f_cam) / s
+                dist_w = math.hypot(wx - px, wy - py)
+                deg_w = math.degrees(math.atan2(wy - py, wx - px)) % 360
+                sec_w = self._angle_to_sector(deg_w)
+                haz_entry = {
+                    **h,
+                    "x": wx,
+                    "y": wy,
+                    "world_x": wx,
+                    "world_y": wy,
+                    "screen_x": xs,
+                    "screen_y": ys,
+                    "dist": dist_w,
+                    "sector": sec_w,
+                    "source": h.get("source", "opencv_hazards")
+                }
+                if "vx" in h:
+                    haz_entry["vx"] = float(h["vx"]) / s
+                if "vy" in h:
+                    haz_entry["vy"] = float(h["vy"]) / s
+                hazards.append(haz_entry)
+
+            # 3. Transform items
+            raw_items = list(vision.get("gems", [])) + list(vision.get("items_on_ground", []))
+            items = []
+            chest_obj = None
+            for it in raw_items:
+                xs = float(it.get("x", 640.0))
+                ys = float(it.get("y", 360.0))
+                wx = (xs - e_cam) / s
+                wy = (ys - f_cam) / s
+                dist_w = math.hypot(wx - px, wy - py)
+                deg_w = math.degrees(math.atan2(wy - py, wx - px)) % 360
+                sec_w = self._angle_to_sector(deg_w)
+                it_entry = {
+                    **it,
+                    "x": wx,
+                    "y": wy,
+                    "world_x": wx,
+                    "world_y": wy,
+                    "screen_x": xs,
+                    "screen_y": ys,
+                    "dist": dist_w,
+                    "sector": sec_w,
+                    "source": it.get("source", "opencv_item")
+                }
+                items.append(it_entry)
+                k_type = str(it.get("type", it.get("kind", ""))).lower()
+                if "chest" in k_type and not chest_obj:
+                    chest_obj = it_entry
+
+            # 4. Transform specials
+            rift_raw = vision.get("rift_target")
+            rift_target = None
+            if rift_raw:
+                r_dict = dict(rift_raw)
+                if r_dict.get("x") is not None and r_dict.get("y") is not None:
+                    rx_s = float(r_dict["x"])
+                    ry_s = float(r_dict["y"])
+                    rx_w = (rx_s - e_cam) / s
+                    ry_w = (ry_s - f_cam) / s
+                    r_dict["x"] = rx_w
+                    r_dict["y"] = ry_w
+                    r_dict["world_x"] = rx_w
+                    r_dict["world_y"] = ry_w
+                    r_dict["screen_x"] = rx_s
+                    r_dict["screen_y"] = ry_s
+                    r_dict["dist"] = math.hypot(rx_w - px, ry_w - py)
+                    deg_r = math.degrees(math.atan2(ry_w - py, rx_w - px)) % 360
+                    r_dict["sector"] = self._angle_to_sector(deg_r)
+                    r_dict["source"] = r_dict.get("source", "opencv_purple_portal")
+                rift_target = r_dict
+
             specials = {
-                "rift": vision.get("rift_target"),
+                "rift": rift_target,
                 "spring": None,
                 "altar": None,
-                "chest": None
+                "chest": chest_obj
             }
-            items = list(vision.get("gems", [])) + list(vision.get("items_on_ground", []))
+
+            cv_obstacles = vision.get("sector_obstacles", {})
+            cv_costs = vision.get("sector_obs_costs", {})
+            terrain_status = "local_view_only" if cv_obstacles else "unobserved"
+            terrain_source = "opencv_terrain" if cv_obstacles else "unobserved"
+
             res_vision = {
-                "enemies": vision.get("enemies", []),
-                "hazards": vision.get("hazards", []),
+                "enemies": enemies,
+                "hazards": hazards,
                 "items": items,
-                "items_on_ground": vision.get("items_on_ground", []),
+                "items_on_ground": [it for it in items if it.get("kind") != "gem"],
                 "specials": specials,
                 "terrain": {
-                    "sector_obstacles": vision.get("sector_obstacles", {}),
-                    "sector_obs_costs": vision.get("sector_obs_costs", {})
+                    "sector_obstacles": cv_obstacles,
+                    "sector_obs_costs": cv_costs,
+                    "source": terrain_source,
+                    "status": terrain_status
                 },
                 "sector_dangers": vision.get("sector_dangers", {}),
-                "sector_enemy_counts": vision.get("sector_enemy_counts", {}),
-                "min_enemy_dist": vision.get("min_enemy_dist", 9999.0),
-                "nearest_enemy_sector": vision.get("nearest_enemy_sector"),
-                "swarm_center": vision.get("swarm_center"),
+                "sector_enemy_counts": sector_enemy_counts,
+                "min_enemy_dist": min_enemy_dist,
+                "nearest_enemy_sector": nearest_enemy_sec,
+                "swarm_center": swarm_center,
                 "gem_cluster_sector": vision.get("gem_cluster_sector"),
                 "best_gem_vector": vision.get("best_gem_vector"),
                 "boss_info": vision.get("boss_info", {}),
@@ -901,7 +1145,12 @@ class GameStateAdapter:
             "items": [],
             "items_on_ground": [],
             "specials": {"rift": None, "spring": None, "altar": None, "chest": None},
-            "terrain": {"sector_obstacles": {}, "sector_obs_costs": {}, "source": "unobserved"},
+            "terrain": {
+                "sector_obstacles": {},
+                "sector_obs_costs": {},
+                "source": "unobserved",
+                "status": "unobserved"
+            },
             "sector_dangers": {},
             "sector_enemy_counts": {s: 0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]},
             "min_enemy_dist": 9999.0,

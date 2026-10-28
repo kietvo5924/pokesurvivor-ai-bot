@@ -93,6 +93,12 @@ class MovementPolicy:
         # ------------------------------------------------------------------
         # Helper functions
         # ------------------------------------------------------------------
+        terrain_info = vision_state.get("terrain") or {}
+        terrain_status = vision_state.get("terrain_status") or terrain_info.get("status")
+        if not terrain_status:
+            terrain_status = "verified" if sector_obstacles else "unobserved"
+        is_terrain_verified = (terrain_status in ("verified", "local_view_only", "bounds_only"))
+
         def is_passable(sec: str) -> bool:
             if sector_obstacles.get(sec, False):
                 return False
@@ -102,6 +108,9 @@ class MovementPolicy:
             return True
 
         def is_completely_safe(sec: str) -> bool:
+            # Distinguish unobserved terrain from verified safe paths
+            if not is_terrain_verified:
+                return False
             if not is_passable(sec):
                 return False
             if sector_dangers.get(sec, 0.0) > 2500.0:

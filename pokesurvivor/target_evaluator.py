@@ -230,16 +230,21 @@ class TargetEvaluator:
             r_sec = rift.get("sector")
 
             if rx is not None and ry is not None:
-                dx = rx - px
-                dy = ry - py
-                if dist is None:
-                    dist = math.hypot(dx, dy)
-                if not r_sec:
-                    r_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
-            elif dist is not None:
+                if rx == 0.0 and ry == 0.0 and not rift.get("source"):
+                    dist = None
+                    r_sec = None
+                else:
+                    dx = rx - px
+                    dy = ry - py
+                    if dist is None:
+                        dist = math.hypot(dx, dy)
+                    if not r_sec:
+                        r_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+            elif dist is not None and r_sec is not None:
                 dist = float(dist)
             else:
                 dist = None
+                r_sec = None
 
             if dist is not None and r_sec:
                 key = f"rift_{rx}_{ry}"
@@ -266,16 +271,21 @@ class TargetEvaluator:
             s_sec = spring.get("sector")
 
             if sx is not None and sy is not None:
-                dx = sx - px
-                dy = sy - py
-                if dist is None:
-                    dist = math.hypot(dx, dy)
-                if not s_sec:
-                    s_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
-            elif dist is not None:
+                if sx == 0.0 and sy == 0.0 and not spring.get("source"):
+                    dist = None
+                    s_sec = None
+                else:
+                    dx = sx - px
+                    dy = sy - py
+                    if dist is None:
+                        dist = math.hypot(dx, dy)
+                    if not s_sec:
+                        s_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+            elif dist is not None and s_sec is not None:
                 dist = float(dist)
             else:
                 dist = None
+                s_sec = None
 
             if dist is not None and s_sec:
                 key = f"spring_{sx}_{sy}"
@@ -304,16 +314,21 @@ class TargetEvaluator:
             c_sec = chest.get("sector")
 
             if cx is not None and cy is not None:
-                dx = cx - px
-                dy = cy - py
-                if dist is None:
-                    dist = math.hypot(dx, dy)
-                if not c_sec:
-                    c_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
-            elif dist is not None:
+                if cx == 0.0 and cy == 0.0 and not chest.get("source"):
+                    dist = None
+                    c_sec = None
+                else:
+                    dx = cx - px
+                    dy = cy - py
+                    if dist is None:
+                        dist = math.hypot(dx, dy)
+                    if not c_sec:
+                        c_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+            elif dist is not None and c_sec is not None:
                 dist = float(dist)
             else:
                 dist = None
+                c_sec = None
 
             if dist is not None and c_sec:
                 key = f"chest_{cx}_{cy}"
@@ -339,16 +354,21 @@ class TargetEvaluator:
             a_sec = altar.get("sector")
 
             if ax is not None and ay is not None:
-                dx = ax - px
-                dy = ay - py
-                if dist is None:
-                    dist = math.hypot(dx, dy)
-                if not a_sec:
-                    a_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
-            elif dist is not None:
+                if ax == 0.0 and ay == 0.0 and not altar.get("source"):
+                    dist = None
+                    a_sec = None
+                else:
+                    dx = ax - px
+                    dy = ay - py
+                    if dist is None:
+                        dist = math.hypot(dx, dy)
+                    if not a_sec:
+                        a_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+            elif dist is not None and a_sec is not None:
                 dist = float(dist)
             else:
                 dist = None
+                a_sec = None
 
             if dist is not None and a_sec:
                 key = f"altar_{ax}_{ay}"

@@ -158,19 +158,41 @@ class RunManager:
             print("[!] Không thể bấm bắt đầu Solo. Kiểm tra lại giao diện.")
             return False
 
-        # 2. Wait for game-phase == 'running'
+        # 2. Wait for match to be ready using GameStateAdapter unified state with DOM/gState/activeScreen fallbacks
         print("[*] Chờ trận đấu sẵn sàng (phase: running)...")
         ready = False
         for wait_i in range(100):  # wait up to 35 seconds
             if self.emergency_stopped:
                 return False
-            dom_state = self.observer.read_dom_state()
-            current_phase = dom_state.get("phase", "none")
+
+            current_phase = "none"
+            active_scr = "unknown"
+            metrics = {}
+
+            if self.game_state_adapter:
+                unified_st = self.game_state_adapter.read_unified_state(frame_img=None, is_moving=False)
+                ui_st = unified_st.get("ui", {})
+                current_phase = ui_st.get("phase", "none")
+                active_scr = ui_st.get("active_screen", "unknown")
+                metrics = unified_st.get("metrics", {})
+            elif self.observer:
+                dom_state = self.observer.read_dom_state()
+                current_phase = dom_state.get("phase", "none")
+                active_scr = dom_state.get("activeScreen", "unknown")
+
+            # Check if match is running via phase, active_screen, or live metrics
             if current_phase == "running":
                 ready = True
                 break
+            if active_scr == "game" and current_phase not in ("ended", "gameover"):
+                ready = True
+                break
+            if metrics.get("kills") is not None or metrics.get("time_seconds") is not None:
+                ready = True
+                break
+
             if wait_i % 10 == 0 and wait_i > 0:
-                print(f"  ...Đang tải trận (Current phase: '{current_phase}') [{wait_i * 0.35:.1f}s]")
+                print(f"  ...Đang tải trận (Current phase: '{current_phase}', screen: '{active_scr}') [{wait_i * 0.35:.1f}s]")
             time.sleep(0.35)
 
         if not ready:
