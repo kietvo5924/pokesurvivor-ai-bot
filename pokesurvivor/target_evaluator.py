@@ -42,28 +42,33 @@ def normalize_game_state(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     if not isinstance(state, dict):
         return {
-            "player": {"hp_ratio": 1.0, "world_x": 0.0, "world_y": 0.0},
+            "player": {"hp_ratio": None, "world_x": 0.0, "world_y": 0.0},
             "specials": {},
             "enemies": [],
             "items": [],
             "hazards": []
         }
 
-    # 1. Player HP ratio & position
+    # 1. Player HP ratio & position (preserving unobserved None, never faking 100%)
     player_data = state.get("player")
     if isinstance(player_data, dict):
         hp_r = player_data.get("hp_ratio")
         if hp_r is None:
-            hp_r = state.get("hp_ratio", 1.0)
-        px = player_data.get("world_x", player_data.get("x", 0.0))
-        py = player_data.get("world_y", player_data.get("y", 0.0))
+            hp_r = state.get("hp_ratio")
+        px = player_data.get("world_x", player_data.get("x"))
+        py = player_data.get("world_y", player_data.get("y"))
+        if px is None or py is None:
+            pos = state.get("player_pos", (640.0, 360.0))
+            px, py = float(pos[0]), float(pos[1])
+        else:
+            px, py = float(px), float(py)
     else:
-        hp_r = state.get("hp_ratio", 1.0)
-        pos = state.get("player_pos", (640, 360))
+        hp_r = state.get("hp_ratio")
+        pos = state.get("player_pos", (640.0, 360.0))
         px, py = float(pos[0]), float(pos[1])
 
     player = {
-        "hp_ratio": max(0.0, min(1.0, float(hp_r))) if hp_r is not None else 1.0,
+        "hp_ratio": max(0.0, min(1.0, float(hp_r))) if hp_r is not None else None,
         "world_x": px,
         "world_y": py
     }
@@ -137,20 +142,25 @@ class TargetEvaluator:
         norm_state = normalize_game_state(game_state)
         player = norm_state["player"]
         hp_ratio = player["hp_ratio"]
+        px = player["world_x"]
+        py = player["world_y"]
         enemies = norm_state["enemies"]
         specials = norm_state["specials"]
         items = norm_state["items"]
 
         # 1. Check Sudden Burst Damage (Emergency Survival Mode)
-        self.hp_history = [(t, hp) for t, hp in self.hp_history if now - t <= 1.8]
-        self.hp_history.append((now, hp_ratio))
-        if len(self.hp_history) >= 2:
-            max_recent_hp = max(hp for _, hp in self.hp_history)
-            if (max_recent_hp - hp_ratio) >= 0.25:
-                # Took >= 25% burst damage recently: enter emergency survival for 2.5s
-                self.emergency_until = now + 2.5
-
-        is_emergency = hp_ratio < 0.35 or now < self.emergency_until
+        is_emergency = False
+        if hp_ratio is not None:
+            self.hp_history = [(t, hp) for t, hp in self.hp_history if now - t <= 1.8]
+            self.hp_history.append((now, hp_ratio))
+            if len(self.hp_history) >= 2:
+                max_recent_hp = max(hp for _, hp in self.hp_history)
+                if (max_recent_hp - hp_ratio) >= 0.25:
+                    # Took >= 25% burst damage recently: enter emergency survival for 2.5s
+                    self.emergency_until = now + 2.5
+            is_emergency = (hp_ratio < 0.35 or now < self.emergency_until)
+        else:
+            is_emergency = (now < self.emergency_until)
 
         # 2. Evaluate Candidates
         candidates = []
@@ -175,144 +185,223 @@ class TargetEvaluator:
                 )
                 tier = 5 if is_gold else 3
                 val = 14.0 if is_gold else 8.0
-                dist = float(e.get("dist", 999.0))
+                
+                ex = e.get("x")
+                ey = e.get("y")
+                dist = e.get("dist")
                 sec = e.get("sector")
-                if not sec and e.get("x") is not None and e.get("y") is not None:
-                    sec = angle_to_sector(math.degrees(math.atan2(e["y"], e["x"])) % 360)
 
-                key = f"thief_{is_gold}_{e.get('x', idx)}_{e.get('y', idx)}"
+                if ex is not None and ey is not None:
+                    dx = ex - px
+                    dy = ey - py
+                    if dist is None:
+                        dist = math.hypot(dx, dy)
+                    if not sec:
+                        sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+                elif dist is not None:
+                    dist = float(dist)
+                else:
+                    dist = None
+
+                if dist is None or not sec:
+                    continue
+
+                key = f"thief_{is_gold}_{ex if ex is not None else idx}_{ey if ey is not None else idx}"
                 candidates.append({
                     "tier": tier,
                     "value": val,
                     "type": "thief_gold" if is_gold else "thief_coin",
                     "mode": "CHASE_GHOLDENGO" if is_gold else "CHASE_MEOWTH",
-                    "x": e.get("x"),
-                    "y": e.get("y"),
-                    "dist": dist,
-                    "sector": sec or "N",
+                    "x": ex,
+                    "y": ey,
+                    "dist": float(dist),
+                    "sector": sec,
                     "hold": False,
                     "key": key
                 })
 
-        # TIER 4: Purple Rift Portal (Only when safe and not in emergency survival)
+        # TIER 4: Purple Rift Portal
+        # STRICT CONDITIONS: Only enter when healthy (hp_ratio >= 0.65) and not in emergency!
         rift = specials.get("rift")
-        if rift and not is_emergency:
-            rx = rift.get("x", 0)
-            ry = rift.get("y", 0)
-            key = f"rift_{rx}_{ry}"
-            if key not in self.ignore_list:
-                r_sec = rift.get("sector")
-                if not r_sec and (rx != 0 or ry != 0):
-                    r_sec = angle_to_sector(math.degrees(math.atan2(ry, rx)) % 360)
-                candidates.append({
-                    "tier": 4,
-                    "value": 12.0,
-                    "type": "rift",
-                    "mode": "ENTER_RIFT",
-                    "x": rx,
-                    "y": ry,
-                    "dist": float(rift.get("dist", 300.0)),
-                    "sector": r_sec or "N",
-                    "hold": True,
-                    "key": key
-                })
+        if rift and not is_emergency and hp_ratio is not None and hp_ratio >= 0.65:
+            rx = rift.get("x")
+            ry = rift.get("y")
+            dist = rift.get("dist")
+            r_sec = rift.get("sector")
 
-        # TIER 4 or 2: Healing Springs (Lifesaver when hurt!)
+            if rx is not None and ry is not None:
+                dx = rx - px
+                dy = ry - py
+                if dist is None:
+                    dist = math.hypot(dx, dy)
+                if not r_sec:
+                    r_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+            elif dist is not None:
+                dist = float(dist)
+            else:
+                dist = None
+
+            if dist is not None and r_sec:
+                key = f"rift_{rx}_{ry}"
+                if key not in self.ignore_list:
+                    candidates.append({
+                        "tier": 4,
+                        "value": 12.0,
+                        "type": "rift",
+                        "mode": "ENTER_RIFT",
+                        "x": rx,
+                        "y": ry,
+                        "dist": float(dist),
+                        "sector": r_sec,
+                        "hold": True,
+                        "key": key
+                    })
+
+        # TIER 4 or 2: Healing Springs (Lifesaver when hurt or cautious when HP unknown)
         spring = specials.get("spring")
-        if spring and hp_ratio < 0.85:
-            sx = spring.get("x", 0)
-            sy = spring.get("y", 0)
-            key = f"spring_{sx}_{sy}"
-            if key not in self.ignore_list:
-                s_sec = spring.get("sector")
-                if not s_sec and (sx != 0 or sy != 0):
-                    s_sec = angle_to_sector(math.degrees(math.atan2(sy, sx)) % 360)
-                # When critically hurt (< 40%), healing is Tier 4 top emergency priority!
-                spring_tier = 4 if hp_ratio < 0.40 else 2
-                spring_val = 16.0 if hp_ratio < 0.40 else 7.0
-                candidates.append({
-                    "tier": spring_tier,
-                    "value": spring_val,
-                    "type": "spring",
-                    "mode": "HEAL_AT_SPRING",
-                    "x": sx,
-                    "y": sy,
-                    "dist": float(spring.get("dist", 200.0)),
-                    "sector": s_sec or "N",
-                    "hold": True,
-                    "key": key
-                })
+        if spring and (hp_ratio is None or hp_ratio < 0.85):
+            sx = spring.get("x")
+            sy = spring.get("y")
+            dist = spring.get("dist")
+            s_sec = spring.get("sector")
+
+            if sx is not None and sy is not None:
+                dx = sx - px
+                dy = sy - py
+                if dist is None:
+                    dist = math.hypot(dx, dy)
+                if not s_sec:
+                    s_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+            elif dist is not None:
+                dist = float(dist)
+            else:
+                dist = None
+
+            if dist is not None and s_sec:
+                key = f"spring_{sx}_{sy}"
+                if key not in self.ignore_list:
+                    spring_tier = 4 if (hp_ratio is not None and hp_ratio < 0.40) else 2
+                    spring_val = 16.0 if (hp_ratio is not None and hp_ratio < 0.40) else 7.0
+                    candidates.append({
+                        "tier": spring_tier,
+                        "value": spring_val,
+                        "type": "spring",
+                        "mode": "HEAL_AT_SPRING",
+                        "x": sx,
+                        "y": sy,
+                        "dist": float(dist),
+                        "sector": s_sec,
+                        "hold": True,
+                        "key": key
+                    })
 
         # TIER 2: Big Chests & Altars (suppressed during emergency)
         chest = specials.get("chest")
         if chest and not is_emergency:
-            cx = chest.get("x", 0)
-            cy = chest.get("y", 0)
-            key = f"chest_{cx}_{cy}"
-            if key not in self.ignore_list:
-                c_sec = chest.get("sector")
-                if not c_sec and (cx != 0 or cy != 0):
-                    c_sec = angle_to_sector(math.degrees(math.atan2(cy, cx)) % 360)
-                candidates.append({
-                    "tier": 2,
-                    "value": 6.0,
-                    "type": "chest",
-                    "mode": "OPEN_CHEST",
-                    "x": cx,
-                    "y": cy,
-                    "dist": float(chest.get("dist", 250.0)),
-                    "sector": c_sec or "N",
-                    "hold": True,
-                    "key": key
-                })
+            cx = chest.get("x")
+            cy = chest.get("y")
+            dist = chest.get("dist")
+            c_sec = chest.get("sector")
+
+            if cx is not None and cy is not None:
+                dx = cx - px
+                dy = cy - py
+                if dist is None:
+                    dist = math.hypot(dx, dy)
+                if not c_sec:
+                    c_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+            elif dist is not None:
+                dist = float(dist)
+            else:
+                dist = None
+
+            if dist is not None and c_sec:
+                key = f"chest_{cx}_{cy}"
+                if key not in self.ignore_list:
+                    candidates.append({
+                        "tier": 2,
+                        "value": 6.0,
+                        "type": "chest",
+                        "mode": "OPEN_CHEST",
+                        "x": cx,
+                        "y": cy,
+                        "dist": float(dist),
+                        "sector": c_sec,
+                        "hold": True,
+                        "key": key
+                    })
 
         altar = specials.get("altar")
         if altar and not is_emergency:
-            ax = altar.get("x", 0)
-            ay = altar.get("y", 0)
-            key = f"altar_{ax}_{ay}"
-            if key not in self.ignore_list:
-                a_sec = altar.get("sector")
-                if not a_sec and (ax != 0 or ay != 0):
-                    a_sec = angle_to_sector(math.degrees(math.atan2(ay, ax)) % 360)
-                candidates.append({
-                    "tier": 2,
-                    "value": 5.0,
-                    "type": "altar",
-                    "mode": "ACTIVATE_ALTAR",
-                    "x": ax,
-                    "y": ay,
-                    "dist": float(altar.get("dist", 220.0)),
-                    "sector": a_sec or "N",
-                    "hold": True,
-                    "key": key
-                })
+            ax = altar.get("x")
+            ay = altar.get("y")
+            dist = altar.get("dist")
+            a_sec = altar.get("sector")
 
-        # TIER 1: Ground pickups / chests / valuable items (suppressed during emergency)
+            if ax is not None and ay is not None:
+                dx = ax - px
+                dy = ay - py
+                if dist is None:
+                    dist = math.hypot(dx, dy)
+                if not a_sec:
+                    a_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+            elif dist is not None:
+                dist = float(dist)
+            else:
+                dist = None
+
+            if dist is not None and a_sec:
+                key = f"altar_{ax}_{ay}"
+                if key not in self.ignore_list:
+                    candidates.append({
+                        "tier": 2,
+                        "value": 5.0,
+                        "type": "altar",
+                        "mode": "ACTIVATE_ALTAR",
+                        "x": ax,
+                        "y": ay,
+                        "dist": float(dist),
+                        "sector": a_sec,
+                        "hold": True,
+                        "key": key
+                    })
+
+        # TIER 1: Ground pickups / valuable items (suppressed during emergency)
         if not is_emergency:
             for idx, it in enumerate(items[:10]):
                 kind = str(it.get("kind", "xp")).lower()
-                dist = float(it.get("dist", 999.0))
-                # Only target high value items as explicit candidates
                 if kind in ["chest", "magnet", "heal", "berry", "ticket", "bomb"] or it.get("value", 0) > 3.0:
                     val = 4.5 if kind == "chest" else 2.5
-                    ix = it.get("x", 0)
-                    iy = it.get("y", 0)
+                    ix = it.get("x")
+                    iy = it.get("y")
+                    dist = it.get("dist")
                     i_sec = it.get("sector")
-                    if not i_sec and (ix != 0 or iy != 0):
-                        i_sec = angle_to_sector(math.degrees(math.atan2(iy, ix)) % 360)
-                    candidates.append({
-                        "tier": 1,
-                        "value": val,
-                        "type": f"item_{kind}",
-                        "mode": "PICKUP_ITEM",
-                        "x": ix,
-                        "y": iy,
-                        "dist": dist,
-                        "sector": i_sec or "N",
-                        "hold": False,
-                        "key": f"item_{kind}_{ix}_{iy}_{idx}"
-                    })
+
+                    if ix is not None and iy is not None:
+                        dx = ix - px
+                        dy = iy - py
+                        if dist is None:
+                            dist = math.hypot(dx, dy)
+                        if not i_sec:
+                            i_sec = angle_to_sector(math.degrees(math.atan2(dy, dx)) % 360)
+                    elif dist is not None:
+                        dist = float(dist)
+                    else:
+                        dist = None
+
+                    if dist is not None and i_sec:
+                        candidates.append({
+                            "tier": 1,
+                            "value": val,
+                            "type": f"item_{kind}",
+                            "mode": "PICKUP_ITEM",
+                            "x": ix,
+                            "y": iy,
+                            "dist": float(dist),
+                            "sector": i_sec,
+                            "hold": False,
+                            "key": f"item_{kind}_{ix}_{iy}_{idx}"
+                        })
 
         # Filter out ignored candidates
         viable = [c for c in candidates if c["key"] not in self.ignore_list]
@@ -330,7 +419,7 @@ class TargetEvaluator:
 
             # Spring dried check: if stood for 2.0s without HP gain, spring is depleted
             if best["type"] == "spring":
-                if hp_ratio > track["hp"] + 0.02:
+                if hp_ratio is not None and track.get("hp") is not None and hp_ratio > track["hp"] + 0.02:
                     track["hp"] = hp_ratio
                     track["start"] = now
                 elif dwell_dur > 2.0:

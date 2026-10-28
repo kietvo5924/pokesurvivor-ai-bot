@@ -450,6 +450,19 @@ class RunManager:
         # If not yet captured, try reading DOM match results once more
         if not dom_results or not dom_results.get("available"):
             dom_results = self.observer.read_match_results()
+        if (not dom_results or not dom_results.get("available")) and unified_state:
+            metrics = unified_state.get("metrics") or {}
+            if metrics.get("available") or metrics.get("is_match_over"):
+                dom_results = {
+                    "available": True,
+                    "source": metrics.get("source", "adapter_metrics"),
+                    "kills": metrics.get("kills"),
+                    "level": metrics.get("level"),
+                    "time_seconds": metrics.get("time_seconds"),
+                    "time_str": metrics.get("time_str"),
+                    "coins": metrics.get("coins"),
+                    "bosses": metrics.get("bosses")
+                }
 
         # If ended via timeout while still running, cleanly open pause to exit
         if not exit_available and phase != "ended":

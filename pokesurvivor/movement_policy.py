@@ -68,7 +68,15 @@ class MovementPolicy:
 
     def select_movement(self, vision_state: Dict[str, Any], current_level: int = 1, elapsed_time: float = 0.0) -> Tuple[str, List[str], float]:
         now = time.time()
-        cx, cy = vision_state.get("player_pos", (640, 360))
+        player_info = vision_state.get("player") or {}
+        if "player_pos" in vision_state:
+            cx, cy = vision_state["player_pos"]
+        elif "world_x" in player_info and "world_y" in player_info:
+            cx, cy = float(player_info["world_x"]), float(player_info["world_y"])
+        elif "x" in player_info and "y" in player_info:
+            cx, cy = float(player_info["x"]), float(player_info["y"])
+        else:
+            cx, cy = 640.0, 360.0
         sector_dangers = vision_state.get("sector_dangers", {})
         sector_obstacles = vision_state.get("sector_obstacles", {})
         sector_obs_costs = vision_state.get("sector_obs_costs", {})
@@ -110,8 +118,10 @@ class MovementPolicy:
         hp_status = vision_state.get("hp_status", "UNKNOWN")
         if hp_status == "UNKNOWN" and isinstance(vision_state.get("player"), dict):
             hp_status = vision_state["player"].get("source", "UNKNOWN")
+        is_hp_unknown = (hp_ratio is None)
         is_low_hp = (hp_ratio is not None and hp_ratio < 0.50)
-        effective_danger_thresh = self.danger_threshold + (25.0 if is_low_hp else 0.0)
+        # Cautious policy: when HP is unknown or low, expand danger buffer
+        effective_danger_thresh = self.danger_threshold + (25.0 if is_low_hp else (15.0 if is_hp_unknown else 0.0))
 
         def score_cand(s: str) -> float:
             score = sector_dangers.get(s, 0.0)
@@ -329,7 +339,7 @@ class MovementPolicy:
                 else:
                     mob_sparsity_score = -self.mob_penalty_weight * mobs_in_sec
 
-                repel_mult = 2.0 if is_low_hp else 1.0
+                repel_mult = 2.0 if is_low_hp else (1.4 if is_hp_unknown else 1.0)
                 if is_encircled:
                     score = (mob_sparsity_score * 2.5) + (alignment_score * 1.5 * repel_mult) - (danger * 0.03) - (obs_cost * 0.04)
                 else:
@@ -357,7 +367,13 @@ class MovementPolicy:
             rift_target = vision_state["specials"].get("rift")
         if rift_target and danger_level == "LOW" and min_enemy_dist > 190.0:
             target_type = rift_target.get("type", "arrow")
-            can_enter_rift = (target_type == "portal" and elapsed_time > 120.0 and current_level >= 3) or (current_level >= 5 and elapsed_time > 180.0)
+            # Entering Rift requires confirmed healthy state (hp_ratio >= 0.65). Never enter when HP is unknown!
+            can_enter_rift = (
+                hp_ratio is not None and hp_ratio >= 0.65 and (
+                    (target_type == "portal" and elapsed_time > 120.0 and current_level >= 3) or
+                    (current_level >= 5 and elapsed_time > 180.0)
+                )
+            )
             if can_enter_rift:
                 rift_sec = rift_target.get("sector")
                 if rift_sec and is_passable(rift_sec) and sector_dangers.get(rift_sec, 0.0) < 600.0:
@@ -479,7 +495,7 @@ class MovementPolicy:
         # 6. EXP GEMS & CHESTS HARVESTING (Strictly gated by health and safety)
         # Never dive into mobs for gems if low HP (< 50%) or if danger is elevated!
         # ------------------------------------------------------------------
-        if not is_low_hp and danger_level == "LOW":
+        if not is_low_hp and not is_hp_unknown and danger_level == "LOW":
             target_gem = gem_cluster_sec or gem_sector
             if target_gem and is_passable(target_gem) and sector_dangers.get(target_gem, 0.0) < 1400.0:
                 self._set_dir(target_gem, now)

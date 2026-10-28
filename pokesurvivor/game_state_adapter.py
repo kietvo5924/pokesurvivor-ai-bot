@@ -116,6 +116,9 @@ class GameStateAdapter:
         self.perception = perception or PerceptionEngine()
         self.last_state: Dict[str, Any] = {}
         self.last_read_time = 0.0
+        self.last_cached_entities: Optional[Dict[str, Any]] = None
+        self.last_frame_time: float = 0.0
+        self.max_frame_staleness: float = 0.85  # Cached vision entities valid up to 850ms between captures
 
     def read_unified_state(self, frame_img: Optional[Any] = None, is_moving: bool = True) -> Dict[str, Any]:
         """
@@ -146,6 +149,10 @@ class GameStateAdapter:
         hp_ratio = player.get("hp_ratio")
         rift_target = entities.get("specials", {}).get("rift")
 
+        px = float(player.get("world_x", 640.0))
+        py = float(player.get("world_y", 360.0))
+        player["pos"] = (px, py)
+
         confidence = 0.98 if player.get("source") == "window_G" else (
             0.90 if player.get("source") == "canvas_telemetry_texts" else (
                 0.80 if player.get("source") == "opencv_fallback" else 0.50
@@ -155,6 +162,7 @@ class GameStateAdapter:
         unified_state = {
             "timestamp": now,
             "player": player,
+            "player_pos": (px, py),
             "enemies": entities["enemies"],
             "hazards": entities["hazards"],
             "items": entities["items"],
@@ -224,6 +232,18 @@ class GameStateAdapter:
                         const projMgr = G.Projectiles || (G.Game ? G.Game.Projectiles : null) || (container ? container.Projectiles : null);
                         const pickupMgr = G.Pickups || (G.Game ? G.Game.Pickups : null) || (container ? container.Pickups : null);
                         const riftMgr = G.Rift || (G.Game ? G.Game.Rift : null) || (container ? container.Rift : null);
+                        const mapMgr = G.Map || (G.Game ? G.Game.Map : null) || (container ? container.Map : null);
+                        let mapBounds = null;
+                        if (mapMgr) {
+                            mapBounds = {
+                                w: mapMgr.w || mapMgr.width || 3000,
+                                h: mapMgr.h || mapMgr.height || 3000,
+                                minX: (mapMgr.minX !== undefined) ? mapMgr.minX : 0,
+                                minY: (mapMgr.minY !== undefined) ? mapMgr.minY : 0,
+                                maxX: mapMgr.maxX || mapMgr.w || mapMgr.width || 3000,
+                                maxY: mapMgr.maxY || mapMgr.h || mapMgr.height || 3000
+                            };
+                        }
 
                         const getList = (mgr) => {
                             if (!mgr) return [];
@@ -263,7 +283,8 @@ class GameStateAdapter:
                             pickups: getList(pickupMgr).slice(0, 30).map(p => ({
                                 x: p.x, y: p.y, kind: p.kind
                             })),
-                            rift: (riftMgr && riftMgr.rift) ? { x: riftMgr.rift.x, y: riftMgr.rift.y, inArena: !!riftMgr.inArena } : null
+                            rift: (riftMgr && riftMgr.rift) ? { x: riftMgr.rift.x, y: riftMgr.rift.y, inArena: !!riftMgr.inArena } : null,
+                            mapBounds: mapBounds
                         };
                     } catch(e) {}
                 }
@@ -398,11 +419,27 @@ class GameStateAdapter:
                             }
                         }
 
+                        let timeSeconds = null;
+                        if (timeStr) {
+                            const parts = timeStr.split(':');
+                            if (parts.length === 2) {
+                                const mins = parseInt(parts[0]);
+                                const secs = parseInt(parts[1]);
+                                if (!isNaN(mins) && !isNaN(secs)) {
+                                    timeSeconds = mins * 60 + secs;
+                                }
+                            } else {
+                                const parsed = parseFloat(timeStr);
+                                if (!isNaN(parsed)) timeSeconds = parsed;
+                            }
+                        }
+
                         res.results = {
                             available: true,
                             kills: kills,
                             level: level,
                             time_str: timeStr,
+                            time_seconds: timeSeconds,
                             coins: coins,
                             bosses: bosses,
                             damage: damage,
@@ -422,14 +459,17 @@ class GameStateAdapter:
         g_state = browser_data.get("gState") or {}
         g_player = g_state.get("player")
         if g_player:
-            hp = g_player.get("hp", 100)
-            max_hp = g_player.get("maxHp", 100)
+            hp = g_player.get("hp")
+            max_hp = g_player.get("maxHp")
+            hp_ratio = None
+            if hp is not None and max_hp and max_hp > 0:
+                hp_ratio = max(0.0, min(1.0, float(hp) / float(max_hp)))
             return {
-                "world_x": g_player.get("x", 0.0),
-                "world_y": g_player.get("y", 0.0),
+                "world_x": float(g_player.get("x", 0.0)),
+                "world_y": float(g_player.get("y", 0.0)),
                 "hp": hp,
                 "max_hp": max_hp,
-                "hp_ratio": max(0.0, min(1.0, hp / max(1, max_hp))),
+                "hp_ratio": hp_ratio,
                 "dex": g_player.get("dex"),
                 "speed": g_player.get("speed", 100.0),
                 "magnet": g_player.get("magnet", 50.0),
@@ -491,10 +531,26 @@ class GameStateAdapter:
         }
 
     def _extract_ui(self, browser_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Extracts UI phase and choice dialog status."""
+        """Extracts UI phase and choice dialog status, with fallback to gState.gameState."""
         dom = browser_data.get("dom") or {}
+        g_state = browser_data.get("gState") or {}
+
+        phase = dom.get("phase", "none")
+        if phase in ("none", "unknown", "", None):
+            g_phase = g_state.get("gameState")
+            if g_phase:
+                g_str = str(g_phase).lower()
+                if g_str in ("running", "play", "playing", "battle"):
+                    phase = "running"
+                elif g_str in ("gameover", "ended", "death", "victory"):
+                    phase = "ended"
+                elif g_str in ("choice", "levelup", "pause", "paused"):
+                    phase = "choice"
+                else:
+                    phase = g_str
+
         return {
-            "phase": dom.get("phase", "none"),
+            "phase": phase,
             "active_screen": dom.get("activeScreen", "unknown"),
             "choice_open": dom.get("choiceOpen", False),
             "modal_kind": dom.get("modalKind", "level-up"),
@@ -508,12 +564,30 @@ class GameStateAdapter:
         """
         Extracts genuine match results or HUD counters.
         Returns None/null when fields are not observed; never fabricates numbers.
+        Includes available: True and time_seconds for seamless StateTracker.end_run compatibility.
         """
         results = browser_data.get("results")
         if results and results.get("available"):
+            time_seconds = results.get("time_seconds")
+            time_str = results.get("time_str")
+            if time_seconds is None and time_str:
+                parts = str(time_str).split(":")
+                if len(parts) == 2:
+                    try:
+                        time_seconds = float(int(parts[0]) * 60 + int(parts[1]))
+                    except ValueError:
+                        pass
+                else:
+                    try:
+                        time_seconds = float(time_str)
+                    except ValueError:
+                        pass
+
             return {
+                "available": True,
                 "kills": results.get("kills"),
-                "time_str": results.get("time_str"),
+                "time_str": time_str,
+                "time_seconds": time_seconds,
                 "coins": results.get("coins"),
                 "level": results.get("level"),
                 "bosses": results.get("bosses"),
@@ -529,6 +603,7 @@ class GameStateAdapter:
         kills = None
         coins = None
         time_str = None
+        time_seconds = None
 
         for t in texts:
             # Match "SHADY FOREST · 0 DEFEATED · 0 COINS" or "0 DEFEATED"
@@ -541,11 +616,18 @@ class GameStateAdapter:
             time_m = re.match(r"^(\d+:\d\d)$", t)
             if time_m:
                 time_str = time_m.group(1)
+                parts = time_str.split(":")
+                try:
+                    time_seconds = float(int(parts[0]) * 60 + int(parts[1]))
+                except ValueError:
+                    pass
 
-        source = "canvas_hud_texts" if (kills is not None or coins is not None) else "unobserved"
+        source = "canvas_hud_texts" if (kills is not None or coins is not None or time_seconds is not None) else "unobserved"
         return {
+            "available": (kills is not None or coins is not None or time_seconds is not None),
             "kills": kills,
             "time_str": time_str,
+            "time_seconds": time_seconds,
             "coins": coins,
             "level": None,
             "bosses": None,
@@ -607,25 +689,100 @@ class GameStateAdapter:
 
             swarm_center = (swarm_x / swarm_count, swarm_y / swarm_count) if swarm_count > 0 else None
 
+            # Terrain calculation from map bounds (if available)
+            sector_obstacles = {s: False for s in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
+            sector_obs_costs = {s: 0.0 for s in ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]}
+            map_bounds = g_state.get("mapBounds")
+            terrain_source = "window_G_bounds" if map_bounds else "unobserved"
+
+            if map_bounds:
+                min_x = float(map_bounds.get("minX", 0.0))
+                max_x = float(map_bounds.get("maxX", 3000.0))
+                min_y = float(map_bounds.get("minY", 0.0))
+                max_y = float(map_bounds.get("maxY", 3000.0))
+                wall_buffer = 180.0
+
+                if px - min_x < wall_buffer:
+                    dist_to_wall = max(1.0, px - min_x)
+                    cost = max(0.0, (wall_buffer - dist_to_wall) * 4.0)
+                    for s in ["W", "NW", "SW"]:
+                        sector_obstacles[s] = True
+                        sector_obs_costs[s] = max(sector_obs_costs[s], cost)
+                if max_x - px < wall_buffer:
+                    dist_to_wall = max(1.0, max_x - px)
+                    cost = max(0.0, (wall_buffer - dist_to_wall) * 4.0)
+                    for s in ["E", "NE", "SE"]:
+                        sector_obstacles[s] = True
+                        sector_obs_costs[s] = max(sector_obs_costs[s], cost)
+                if py - min_y < wall_buffer:
+                    dist_to_wall = max(1.0, py - min_y)
+                    cost = max(0.0, (wall_buffer - dist_to_wall) * 4.0)
+                    for s in ["N", "NW", "NE"]:
+                        sector_obstacles[s] = True
+                        sector_obs_costs[s] = max(sector_obs_costs[s], cost)
+                if max_y - py < wall_buffer:
+                    dist_to_wall = max(1.0, max_y - py)
+                    cost = max(0.0, (wall_buffer - dist_to_wall) * 4.0)
+                    for s in ["S", "SW", "SE"]:
+                        sector_obstacles[s] = True
+                        sector_obs_costs[s] = max(sector_obs_costs[s], cost)
+
             hazards = []
             for z in g_state.get("hazards", []):
+                zx = float(z.get("x", 0.0))
+                zy = float(z.get("y", 0.0))
+                z_dist = math.hypot(zx - px, zy - py)
+                z_deg = math.degrees(math.atan2(zy - py, zx - px)) % 360
+                z_sec = self._angle_to_sector(z_deg)
                 hazards.append({
                     "kind": z.get("kind"),
-                    "x": z.get("x"),
-                    "y": z.get("y"),
-                    "dist": math.hypot(z.get("x", 0) - px, z.get("y", 0) - py),
+                    "type": "telegraph",
+                    "x": zx,
+                    "y": zy,
+                    "dist": z_dist,
+                    "sector": z_sec,
                     "radius": z.get("r", 20),
                     "angle": z.get("angle", 0.0),
+                    "is_imminent": z_dist < 110.0,
                     "source": "window_G"
                 })
             for p in g_state.get("projectiles", []):
+                px_b = float(p.get("x", 0.0))
+                py_b = float(p.get("y", 0.0))
+                dx = px_b - px
+                dy = py_b - py
+                p_dist = math.hypot(dx, dy)
+                p_deg = math.degrees(math.atan2(dy, dx)) % 360
+                p_sec = self._angle_to_sector(p_deg)
+                vx = float(p.get("vx", 0.0))
+                vy = float(p.get("vy", 0.0))
+                v_sq = vx * vx + vy * vy
+                ttc = 99.0
+                dca = p_dist
+                is_imminent = False
+                if v_sq > 1e-4:
+                    rx = -dx
+                    ry = -dy
+                    t_star = (rx * vx + ry * vy) / v_sq
+                    if t_star > 0:
+                        ttc = t_star
+                        rel_x = rx - vx * t_star
+                        rel_y = ry - vy * t_star
+                        dca = math.hypot(rel_x, rel_y)
+                        if ttc < 1.2 and dca < 55.0:
+                            is_imminent = True
                 hazards.append({
                     "kind": "shot",
-                    "x": p.get("x"),
-                    "y": p.get("y"),
-                    "dist": math.hypot(p.get("x", 0) - px, p.get("y", 0) - py),
-                    "vx": p.get("vx", 0.0),
-                    "vy": p.get("vy", 0.0),
+                    "type": "bullet",
+                    "x": px_b,
+                    "y": py_b,
+                    "dist": p_dist,
+                    "sector": p_sec,
+                    "vx": vx,
+                    "vy": vy,
+                    "ttc": ttc,
+                    "dca": dca,
+                    "is_imminent": is_imminent,
                     "source": "window_G"
                 })
 
@@ -660,13 +817,17 @@ class GameStateAdapter:
                 )
             )
 
-            return {
+            res_g = {
                 "enemies": enemies,
                 "hazards": hazards,
                 "items": items,
                 "items_on_ground": items,
                 "specials": specials,
-                "terrain": {"sector_obstacles": {}, "sector_obs_costs": {}},
+                "terrain": {
+                    "sector_obstacles": sector_obstacles,
+                    "sector_obs_costs": sector_obs_costs,
+                    "source": terrain_source
+                },
                 "sector_dangers": sector_dangers,
                 "sector_enemy_counts": sector_enemy_counts,
                 "min_enemy_dist": min_enemy_dist,
@@ -681,6 +842,9 @@ class GameStateAdapter:
                 "source": "window_G",
                 "hazard_source": "window_G"
             }
+            self.last_cached_entities = res_g
+            self.last_frame_time = time.time()
+            return res_g
 
         # Branch 2: OpenCV Visual Perception (Doofcraft & Generic Canvas)
         if frame_img is not None:
@@ -692,7 +856,7 @@ class GameStateAdapter:
                 "chest": None
             }
             items = list(vision.get("gems", [])) + list(vision.get("items_on_ground", []))
-            return {
+            res_vision = {
                 "enemies": vision.get("enemies", []),
                 "hazards": vision.get("hazards", []),
                 "items": items,
@@ -716,15 +880,28 @@ class GameStateAdapter:
                 "source": "opencv_perception",
                 "hazard_source": "opencv_hazards"
             }
+            self.last_cached_entities = res_vision
+            self.last_frame_time = time.time()
+            return res_vision
 
-        # Empty fallback
+        # Branch 3: Cached Vision Entities across skipped visual frames
+        now = time.time()
+        if self.last_cached_entities is not None and (now - self.last_frame_time) <= self.max_frame_staleness:
+            cached = dict(self.last_cached_entities)
+            orig_src = self.last_cached_entities.get("source", "opencv")
+            cached["source"] = f"{orig_src}_cached"
+            cached["cached_at"] = self.last_frame_time
+            cached["staleness"] = round(now - self.last_frame_time, 3)
+            return cached
+
+        # Empty fallback (expired or unobserved)
         return {
             "enemies": [],
             "hazards": [],
             "items": [],
             "items_on_ground": [],
             "specials": {"rift": None, "spring": None, "altar": None, "chest": None},
-            "terrain": {"sector_obstacles": {}, "sector_obs_costs": {}},
+            "terrain": {"sector_obstacles": {}, "sector_obs_costs": {}, "source": "unobserved"},
             "sector_dangers": {},
             "sector_enemy_counts": {s: 0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]},
             "min_enemy_dist": 9999.0,
@@ -736,8 +913,8 @@ class GameStateAdapter:
             "danger_level": "LOW",
             "is_encircled": False,
             "is_stuck": False,
-            "source": "empty",
-            "hazard_source": "empty"
+            "source": "unobserved_expired",
+            "hazard_source": "unobserved_expired"
         }
 
     def _angle_to_sector(self, angle_deg: float) -> str:

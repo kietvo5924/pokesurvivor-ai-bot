@@ -175,6 +175,25 @@ class StateTracker:
             if dom_results.get("time_seconds") is not None:
                 self.survival_time = float(dom_results["time_seconds"])
                 self.survival_time_source = "dom_results_time"
+            elif dom_results.get("time_str"):
+                parsed_time = None
+                parts = str(dom_results["time_str"]).split(":")
+                if len(parts) == 2:
+                    try:
+                        parsed_time = float(int(parts[0]) * 60 + int(parts[1]))
+                    except ValueError:
+                        pass
+                else:
+                    try:
+                        parsed_time = float(dom_results["time_str"])
+                    except ValueError:
+                        pass
+                if parsed_time is not None:
+                    self.survival_time = parsed_time
+                    self.survival_time_source = "dom_results_time_str"
+                else:
+                    self.survival_time = round(self.duration, 1)
+                    self.survival_time_source = "state_tracker_clock"
             else:
                 self.survival_time = round(self.duration, 1)
                 self.survival_time_source = "state_tracker_clock"
