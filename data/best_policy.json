@@ -1,0 +1,92 @@
+{
+  "version": "9.7",
+  "description": "Meta Fire Blast & Rift Boss Hunting Loadout (1 Buff + 3 Attack)",
+  "movement": {
+    "pattern": "kiting",
+    "step_duration": 0.22,
+    "evasion_weight": 0.99,
+    "exp_weight": 0.42,
+    "danger_threshold": 185.0,
+    "enter_rift_priority": true,
+    "mob_penalty_weight": 150.0,
+    "mob_clear_corridor_bonus": 520.0,
+    "wall_avoidance_weight": 2.5,
+    "wall_breakout_thrust": 0.52,
+    "dodge_hold_duration": 0.45,
+    "dir_commit_duration": 0.38,
+    "exp_harvest_weight": 0.65
+  },
+  "upgrade": {
+    "priority_moves": [
+      "Ember",
+      "Fire Blast",
+      "Will-O-Wisp",
+      "Fire Spin",
+      "Take Down",
+      "Tackle",
+      "Flamethrower"
+    ],
+    "buff_moves": [
+      "Swords Dance",
+      "Nasty Plot",
+      "Harden",
+      "Agility",
+      "Iron Defense",
+      "Growth"
+    ],
+    "priority_stats": [
+      "Power",
+      "Sprint",
+      "Vigor",
+      "Reflexes",
+      "Synthesis"
+    ],
+    "rush_primary_move": "Ember",
+    "primary_move_max_level": 5,
+    "target_bonded_moves": 4,
+    "target_buff_count": 1,
+    "target_attack_count": 3,
+    "prefer_evolution": true,
+    "prefer_new_skills": false,
+    "skill_ratings": {
+      "flamethrower": 6.075,
+      "ember": 6.759,
+      "power": 7.101,
+      "reflexes": 9.45,
+      "magnet": 7.875,
+      "revive": 5.633,
+      "fire spin": 10.345,
+      "sitrus berry": 7.75,
+      "synthesis": 6.268,
+      "tackle": 10.095,
+      "sprint": 6.766,
+      "flame wheel": 1.774,
+      "harden": 5.463,
+      "swords dance": 6.874,
+      "heat wave": 2.891,
+      "will-o-wisp": 13.68,
+      "vigor": 5.215,
+      "learning": 6.727,
+      "armor": 8.745,
+      "aqua ring": 0.776,
+      "water gun": 0.615,
+      "focus": 3.093,
+      "hydro pump": 2.965
+    }
+  },
+  "items": {
+    "priority": [
+      "leftovers",
+      "shell-bell",
+      "focus-band",
+      "charcoal",
+      "choice-specs",
+      "choice-band",
+      "muscle-band",
+      "amulet-coin",
+      "exp-share",
+      "lucky-egg"
+    ]
+  },
+  "best_score": 719.0
+}
