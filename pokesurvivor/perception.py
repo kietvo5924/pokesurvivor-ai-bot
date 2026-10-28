@@ -405,7 +405,6 @@ class PerceptionEngine:
         # Combined full HP container track
         hp_track = active_hp | empty_hp
 
-        cnts_track, _ = cv2.findContours((hp_track * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cnts_active, _ = cv2.findContours((active_hp * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         active_w = 0
@@ -415,33 +414,64 @@ class PerceptionEngine:
             if bw > 15 and 4 <= bh <= 20:
                 if bw > active_w:
                     active_w = bw
-                    active_box = (bx + 30, by + 15, bw, bh)
+                    active_box = (bx, by, bw, bh)
 
-        total_w = active_w
-        track_box = None
-        for c in cnts_track:
-            bx, by, bw, bh = cv2.boundingRect(c)
-            if bw >= active_w and 4 <= bh <= 20:
-                if bw > total_w:
-                    total_w = bw
-                    track_box = (bx + 30, by + 15, bw, bh)
-
-        if active_w == 0 and total_w == 0:
+        if active_box is None:
             res = {"hp_ratio": None, "status": "UNKNOWN", "active_width": 0, "total_width": 0, "box": None}
             self.last_hp_result = res
             return res
 
-        # Standard full HP bar width in PokeSurvivor is ~140px to 168px
-        max_len = max(active_w, total_w, 140)
-        ratio = min(1.0, max(0.0, float(active_w) / float(max_len)))
-        status = "VERIFIED" if (active_w > 0 and total_w > 0) else "ESTIMATED"
+        bx, by, bw, bh = active_box
+        y1 = max(0, by - 1)
+        y2 = min(hud_crop.shape[0], by + bh + 1)
+        slice_r = r[y1:y2, bx:min(hud_crop.shape[1], bx + 220)]
+        slice_g = g[y1:y2, bx:min(hud_crop.shape[1], bx + 220)]
+        slice_b = b[y1:y2, bx:min(hud_crop.shape[1], bx + 220)]
+
+        # Bar pixel classification: active fill, empty reddish container track, or white/pink text on the bar
+        is_bar_pixel = (
+            ((slice_r > 175) & ((slice_r - slice_g) > 70) & ((slice_r - slice_b) > 40)) |
+            ((slice_r > 30) & (slice_r < 140) & (slice_g < 75) & (slice_b < 75)) |
+            ((slice_r > 180) & (slice_g > 180) & (slice_b > 180))
+        )
+        col_has_bar = np.any(is_bar_pixel, axis=0)
+
+        total_w = active_w
+        gap = 0
+        for i, val in enumerate(col_has_bar):
+            if val:
+                total_w = i + 1
+                gap = 0
+            else:
+                if i >= active_w:
+                    gap += 1
+                    if gap >= 4:
+                        break
+
+        abs_box = (bx + 30, by + 15, total_w, bh)
+
+        # Verification criteria:
+        # Full track measured in normal PokéSurvivor container range (120 - 195px)
+        if 120 <= total_w <= 195:
+            ratio = min(1.0, max(0.0, float(active_w) / float(total_w)))
+            status = "VERIFIED"
+        elif active_w >= 140:
+            ratio = 1.0
+            status = "VERIFIED"
+        elif active_w > 0:
+            ratio = min(1.0, max(0.0, float(active_w) / 142.0))
+            status = "ESTIMATED"
+        else:
+            res = {"hp_ratio": None, "status": "UNKNOWN", "active_width": 0, "total_width": 0, "box": None}
+            self.last_hp_result = res
+            return res
 
         res = {
             "hp_ratio": round(ratio, 3),
             "status": status,
             "active_width": active_w,
-            "total_width": max_len,
-            "box": active_box or track_box
+            "total_width": total_w,
+            "box": abs_box
         }
         self.last_hp_result = res
         return res
@@ -625,15 +655,14 @@ class PerceptionEngine:
                     best_prev = prev
 
             if best_prev is not None and dt > 0:
-                vx = (hx - best_prev["x"]) / dt
-                vy = (hy - best_prev["y"]) / dt
-            elif h.get("type") == "poison_bullet":
-                to_px = cx - hx
-                to_py = cy - hy
-                norm = math.hypot(to_px, to_py)
-                if norm > 0:
-                    vx = (to_px / norm) * 140.0
-                    vy = (to_py / norm) * 140.0
+                raw_vx = (hx - best_prev["x"]) / dt
+                raw_vy = (hy - best_prev["y"]) / dt
+                raw_speed = math.hypot(raw_vx, raw_vy)
+                # Physical validation: projectile velocity in PokéSurvivor is between 30 and 450 px/s
+                if raw_speed <= 500.0:
+                    vx = raw_vx
+                    vy = raw_vy
+            # Newly observed hazards have no multi-frame evidence -> vx = 0.0, vy = 0.0 without assuming collision vector
 
             speed = math.hypot(vx, vy)
             rx = cx - hx
@@ -645,7 +674,7 @@ class PerceptionEngine:
             dca = dist
             is_imminent = False
 
-            if speed > 20.0 and dot > 0:
+            if speed > 25.0 and dot > 0:
                 ttc = dot / (speed * speed)
                 dca_x = rx - vx * ttc
                 dca_y = ry - vy * ttc
@@ -657,6 +686,11 @@ class PerceptionEngine:
                     ttc = 0.4
                     dca = dist
                     is_imminent = True
+            elif dist < 45.0:
+                # Immediate proximity threat even without multi-frame vector
+                ttc = 0.25
+                dca = dist
+                is_imminent = True
 
             h_tracked = dict(h)
             h_tracked["vx"] = round(vx, 1)
@@ -730,14 +764,24 @@ class PerceptionEngine:
                             "area": area
                         }
 
-                        # Check for ground items / chests (distinguishable by aspect ratio and location)
+                        # Check for ground items / chests (distinguishable by aspect ratio and gold/wood coloration)
                         x, y, bw, bh = cv2.boundingRect(c)
                         aspect = float(bw) / float(max(1, bh))
-                        if 0.8 <= aspect <= 1.25 and 150 < area < 900:
-                            # Could be item box or chest
+                        is_item = False
+                        if 0.75 <= aspect <= 1.35 and 120 < area < 1000:
+                            roi_hsv = hsv[max(0, y):min(h, y+bh), max(0, x):min(w, x+bw)]
+                            if roi_hsv.size > 0:
+                                gold_mask = cv2.inRange(roi_hsv, np.array([15, 100, 100]), np.array([38, 255, 255]))
+                                gold_ratio = np.count_nonzero(gold_mask) / float(max(1, bw * bh))
+                                if gold_ratio > 0.15:
+                                    is_item = True
+
+                        if is_item:
+                            entity_data["type"] = "chest"
                             items.append(entity_data)
-                        
-                        enemies.append(entity_data)
+                        else:
+                            entity_data["type"] = "enemy"
+                            enemies.append(entity_data)
 
         enemies.sort(key=lambda e: e["dist"])
         items.sort(key=lambda i: i["dist"])

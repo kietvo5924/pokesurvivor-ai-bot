@@ -466,30 +466,42 @@ class MovementPolicy:
                 continue
 
             rad = math.radians(deg)
-            px_cand = cx + v_player_speed * math.cos(rad) * step_dt
-            py_cand = cy + v_player_speed * math.sin(rad) * step_dt
+            v_px = v_player_speed * math.cos(rad)
+            v_py = v_player_speed * math.sin(rad)
 
             for h in urgent_hazards:
                 hx = h.get("x", cx)
                 hy = h.get("y", cy)
                 vx = h.get("vx", 0.0)
                 vy = h.get("vy", 0.0)
-                ttc = h.get("ttc", 99.0)
+                h_type = h.get("type", "hazard")
 
-                eval_t = min(step_dt, ttc) if ttc > 0.05 else step_dt
-                hx_future = hx + vx * eval_t
-                hy_future = hy + vy * eval_t
+                # Synchronized continuous closest approach over t in [0, step_dt]
+                r0_x = cx - hx
+                r0_y = cy - hy
+                dv_x = v_px - vx
+                dv_y = v_py - vy
+                dv_sq = dv_x * dv_x + dv_y * dv_y
 
-                proj_dist = math.hypot(px_cand - hx_future, py_cand - hy_future)
-                if proj_dist < 45.0:
-                    sector_hazard_risk[sec] += 12000.0 / max(10.0, proj_dist)
-                elif proj_dist < 80.0:
-                    sector_hazard_risk[sec] += 4000.0 / max(10.0, proj_dist)
+                if dv_sq > 1e-4:
+                    t_star = -(r0_x * dv_x + r0_y * dv_y) / dv_sq
+                    t_eval = max(0.0, min(step_dt, t_star))
+                else:
+                    t_eval = 0.0
 
-                if h.get("type") == "telegraph":
-                    ground_dist = math.hypot(px_cand - hx, py_cand - hy)
-                    if ground_dist < 65.0:
-                        sector_hazard_risk[sec] += 8000.0
+                # Player and hazard positions evaluated at identical future time t_eval
+                rel_x = r0_x + dv_x * t_eval
+                rel_y = r0_y + dv_y * t_eval
+                dca_proj = math.hypot(rel_x, rel_y)
+
+                if h_type == "telegraph":
+                    if dca_proj < 65.0:
+                        sector_hazard_risk[sec] += 9000.0
+                else:
+                    if dca_proj < 45.0:
+                        sector_hazard_risk[sec] += 15000.0 / max(5.0, dca_proj)
+                    elif dca_proj < 85.0:
+                        sector_hazard_risk[sec] += 4500.0 / max(10.0, dca_proj)
 
             mobs = sector_enemy_counts.get(sec, 0)
             sector_hazard_risk[sec] += mobs * self.mob_penalty_weight * 1.2

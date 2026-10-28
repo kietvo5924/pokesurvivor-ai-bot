@@ -41,7 +41,7 @@ class GameObserver:
     def get_selected_partner(self) -> Dict[str, Any]:
         """Reads selected partner Pokemon details from the Solo screen DOM."""
         if not self.page:
-            return {"name": "Unknown", "startsWith": "", "dex": None}
+            return {"name": "Unknown", "startsWith": "", "starting_move": "", "dex": None}
 
         try:
             return self.page.evaluate('''() => {
@@ -50,7 +50,7 @@ class GameObserver:
                 let partnerName = '';
                 
                 // 1. Search text containing "Starts with"
-                const allDivs = Array.from(document.querySelectorAll('div, section, aside, p'));
+                const allDivs = Array.from(document.querySelectorAll('div, section, aside, p, span, h2, h3'));
                 for (let el of allDivs) {
                     const txt = el.innerText || '';
                     if (txt.includes('Starts with')) {
@@ -76,17 +76,20 @@ class GameObserver:
                         if (nameParts.length > 0) {
                             partnerName = nameParts.join(' ');
                         }
+                    } else if (raw) {
+                        partnerName = raw;
                     }
                 }
 
                 return {
                     name: partnerName || (dex ? `Pokemon #${dex}` : 'Unknown'),
+                    starting_move: startsWithMove,
                     startsWith: startsWithMove,
                     dex: dex
                 };
             }''')
         except Exception as e:
-            return {"name": "Unknown", "startsWith": "", "dex": None, "error": str(e)}
+            return {"name": "Unknown", "startsWith": "", "starting_move": "", "dex": None, "error": str(e)}
 
     def read_dom_state(self) -> Dict[str, Any]:
         """Reads clean structured game state from the DOM."""
@@ -197,59 +200,4 @@ class GameObserver:
                 "exitAvailable": False,
                 "error": str(e)
             }
-
-    def get_selected_partner(self) -> Optional[Dict[str, Any]]:
-        """
-        Reads active partner Pokemon info (name, dex, startsWith move) from Solo screen.
-        """
-        if not self.page:
-            return None
-        try:
-            return self.page.evaluate('''() => {
-                try {
-                    const allDivs = Array.from(document.querySelectorAll('div, section, aside, p, span, h2, h3'));
-                    let startsWithMove = '';
-                    let dex = 0;
-                    let name = '';
-
-                    for (let el of allDivs) {
-                        const txt = el.innerText || '';
-                        if (txt.includes('Starts with')) {
-                            const match = txt.match(/Starts with\\s+([^\\n]+)/i);
-                            if (match) {
-                                startsWithMove = match[1].trim();
-                            }
-                            const dexMatch = txt.match(/#(\\d+)/);
-                            if (dexMatch) {
-                                dex = parseInt(dexMatch[1]);
-                            }
-                        }
-                    }
-
-                    const selectedCell = document.querySelector('.cell.on');
-                    if (selectedCell) {
-                        const cTxt = selectedCell.innerText.replace(/\\n/g, ' ').trim();
-                        const m = cTxt.match(/^(\\d+)\\s+([A-Za-z\\s\\-]+?)(?:\\s*\\+\\d+)?$/);
-                        if (m) {
-                            if (!dex) dex = parseInt(m[1]);
-                            name = m[2].trim();
-                        } else {
-                            name = cTxt;
-                        }
-                    }
-
-                    if (!name && dex === 788) name = 'Tapu Fini';
-                    if (!name && dex === 813) name = 'Scorbunny';
-
-                    return {
-                        name: name || 'Tapu Fini',
-                        dex: dex || 788,
-                        starting_move: startsWithMove || (name.includes('Fini') ? 'Water Gun' : 'Ember')
-                    };
-                } catch(e) {
-                    return { name: 'Tapu Fini', dex: 788, starting_move: 'Water Gun' };
-                }
-            }''')
-        except Exception:
-            return {"name": "Tapu Fini", "dex": 788, "starting_move": "Water Gun"}
 

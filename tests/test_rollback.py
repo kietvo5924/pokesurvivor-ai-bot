@@ -96,5 +96,75 @@ class TestLearningAndRollback(unittest.TestCase):
         self.assertTrue(res3.get("is_promoted", False))
         self.assertEqual(self.engine.current_policy["version"], "5.1")
 
+    def test_fixed_policy_during_eval_block(self):
+        initial_policy = copy.deepcopy(self.engine.current_policy)
+        self.engine.learning_state["eval_block_runs"] = []
+        run1 = {
+            "duration": 70.0,
+            "max_level": 3,
+            "damage_events": 5,
+            "damage_incidents": [{"near_wall": True}],
+            "trajectory_snapshots": [],
+            "stuck_events": 2,
+            "end_reason": "defeated"
+        }
+        # Run 1: should record data in eval block but NOT change current_policy
+        self.engine.evaluate_run(run1)
+        self.assertEqual(self.engine.current_policy["movement"], initial_policy["movement"])
+        self.assertEqual(len(self.engine.learning_state["eval_block_runs"]), 1)
+
+        # Run 2: still identical
+        self.engine.evaluate_run(run1)
+        self.assertEqual(self.engine.current_policy["movement"], initial_policy["movement"])
+        self.assertEqual(len(self.engine.learning_state["eval_block_runs"]), 2)
+
+    def test_controlled_search_when_parameter_at_ceiling(self):
+        # Set mob_penalty_weight already at ceiling (150.0)
+        self.engine.current_policy["movement"]["mob_penalty_weight"] = 150.0
+        self.engine.current_policy["movement"]["mob_clear_corridor_bonus"] = 350.0
+        self.engine.learning_state["eval_block_runs"] = []
+        self.engine.learning_state["best_eval_avg"] = 50.0
+
+        run_swarm = {
+            "duration": 65.0,
+            "max_level": 3,
+            "damage_events": 4,
+            "damage_incidents": [{"is_encircled": True, "min_enemy_dist": 100.0}],
+            "trajectory_snapshots": [],
+            "stuck_events": 0,
+            "end_reason": "defeated"
+        }
+        # Complete a 3-run block
+        self.engine.evaluate_run(run_swarm)
+        self.engine.evaluate_run(run_swarm)
+        self.engine.evaluate_run(run_swarm)
+
+        # mob_penalty_weight must stay at or below clamp limit 150.0
+        self.assertEqual(self.engine.current_policy["movement"]["mob_penalty_weight"], 150.0)
+        # Secondary lever (corridor bonus) must have been boosted instead of no-op!
+        self.assertGreater(self.engine.current_policy["movement"]["mob_clear_corridor_bonus"], 350.0)
+
+    def test_individualized_skill_attribution(self):
+        self.engine.learning_state["skill_ratings"] = {}
+        run_with_skills = {
+            "duration": 100.0,
+            "max_level": 4,
+            "damage_events": 1,
+            "damage_incidents": [],
+            "trajectory_snapshots": [],
+            "stuck_events": 0,
+            "end_reason": "timeout",
+            "upgrades": [
+                {"name": "Water Gun", "tag": "Move", "time": 0.0},     # Active for 100% of the match
+                {"name": "Tackle", "tag": "Move", "time": 95.0}         # Active for only 5% of the match
+            ]
+        }
+        self.engine.evaluate_run(run_with_skills)
+        ratings = self.engine.learning_state["skill_ratings"]
+        # Water Gun (full active duration + core move) must receive significantly higher rating than late-pick Tackle
+        self.assertIn("water gun", ratings)
+        self.assertIn("tackle", ratings)
+        self.assertGreater(ratings["water gun"], ratings["tackle"])
+
 if __name__ == "__main__":
     unittest.main()

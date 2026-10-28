@@ -98,104 +98,68 @@ class LearningEngine:
         print(f"   - Kết luận nguyên nhân kết thúc    : {death_cause} ({death_summary})")
         print("⚙️ Đang tính toán Gradient thích nghi & Cập nhật tham số...")
 
-        adapted_policy = copy.deepcopy(self.current_policy)
-        mov = adapted_policy.setdefault("movement", {})
-        upg = adapted_policy.setdefault("upgrade", {})
-
-        # Ensure all parametric weights exist with baseline defaults
-        cur_danger_thresh = float(mov.get("danger_threshold", 160.0))
-        cur_mob_penalty = float(mov.get("mob_penalty_weight", 85.0))
-        cur_corridor_bonus = float(mov.get("mob_clear_corridor_bonus", 350.0))
-        cur_wall_avoid = float(mov.get("wall_avoidance_weight", 1.4))
-        cur_wall_thrust = float(mov.get("wall_breakout_thrust", 0.40))
-        cur_dodge_hold = float(mov.get("dodge_hold_duration", 0.35))
-        cur_dir_commit = float(mov.get("dir_commit_duration", 0.28))
-        cur_exp_weight = float(mov.get("exp_harvest_weight", 0.45))
-        cur_evasion = float(mov.get("evasion_weight", 0.95))
-
-        param_deltas = []
-
-        # --- 2. PARAMETRIC GRADIENT UPDATES ---
-        # A. Swarm Collision & Encirclement Resistance
-        if swarm_damage_count > 0 or encircle_rate > 0.08:
-            delta_danger = min(12.0, 4.0 + swarm_damage_count * 1.2)
-            new_danger = min(185.0, max(145.0, cur_danger_thresh + delta_danger))
-            param_deltas.append(f"Vành đai an toàn (danger_threshold): {cur_danger_thresh:.0f}px -> {new_danger:.0f}px (+{delta_danger:.0f}px)")
-            mov["danger_threshold"] = new_danger
-
-            delta_mob_pen = min(25.0, 5.0 + swarm_damage_count * 1.5)
-            new_mob_pen = min(150.0, cur_mob_penalty + delta_mob_pen)
-            param_deltas.append(f"Trọng số phạt đâm quái (mob_penalty): {cur_mob_penalty:.0f} -> {new_mob_pen:.0f} (+{delta_mob_pen:.0f})")
-            mov["mob_penalty_weight"] = new_mob_pen
-
-            new_corridor = min(520.0, cur_corridor_bonus + 30.0)
-            param_deltas.append(f"Thưởng tìm khe hở 0 quái (corridor_bonus): {cur_corridor_bonus:.0f} -> {new_corridor:.0f} (+30)")
-            mov["mob_clear_corridor_bonus"] = new_corridor
-
-        # B. Wall Trapping & Corner Resistance
-        if wall_damage_count > 0 or last_stuck:
-            new_wall_avoid = min(2.5, cur_wall_avoid + 0.20)
-            new_wall_thrust = min(0.52, cur_wall_thrust + 0.03)
-            param_deltas.append(f"Độ né tránh góc tường (wall_avoidance): {cur_wall_avoid:.2f} -> {new_wall_avoid:.2f} (+0.20)")
-            param_deltas.append(f"Lực phóng bứt vách (wall_breakout_thrust): {cur_wall_thrust:.2f}s -> {new_wall_thrust:.2f}s (+0.03s)")
-            mov["wall_avoidance_weight"] = new_wall_avoid
-            mov["wall_breakout_thrust"] = new_wall_thrust
-
-        # C. Projectile & Skill Dodging
-        if hazard_damage_count > 0 or run_data.get("dodge_events", 0) > 10:
-            new_dodge_hold = min(0.45, cur_dodge_hold + 0.02)
-            new_evasion = min(0.99, cur_evasion + 0.02)
-            param_deltas.append(f"Thời gian giữ sải né đạn (dodge_hold): {cur_dodge_hold:.2f}s -> {new_dodge_hold:.2f}s (+0.02s)")
-            mov["dodge_hold_duration"] = new_dodge_hold
-            mov["evasion_weight"] = new_evasion
-
-        # D. Directional Stride Commitment (Anti-Oscillation)
-        if damage_events > 3:
-            new_commit = min(0.38, cur_dir_commit + 0.02)
-            param_deltas.append(f"Khóa quán tính chống rung giật (dir_commit): {cur_dir_commit:.2f}s -> {new_commit:.2f}s (+0.02s)")
-            mov["dir_commit_duration"] = new_commit
-
-        # E. EXP Acceleration for High Survival
-        if duration > 75.0 and level >= 4:
-            new_exp = min(0.65, cur_exp_weight + 0.04)
-            param_deltas.append(f"Ưu tiên hút ngọc EXP (exp_harvest_weight): {cur_exp_weight:.2f} -> {new_exp:.2f} (+0.04)")
-            mov["exp_harvest_weight"] = new_exp
-
-        # --- 3. SKILL RATINGS EMA VALUE NETWORK ---
+        # --- 3. INDIVIDUALIZED SKILL ATTRIBUTION (EMA VALUE NETWORK) ---
         skill_ratings = self.learning_state.setdefault("skill_ratings", {})
-        run_reward = (duration / 60.0) + (level * 1.2) - (damage_events * 0.08)
-        run_reward = max(0.2, run_reward)
-        chosen_skills = [u.get("name", "").strip().lower() for u in run_data.get("upgrades", []) if u.get("name")]
+        base_run_reward = (duration / 60.0) + (level * 1.2) - (damage_events * 0.08)
+        base_run_reward = max(0.2, base_run_reward)
 
+        upgrades = run_data.get("upgrades", [])
         learned_skill_logs = []
-        for s_name in chosen_skills:
+        for u in upgrades:
+            s_name = u.get("name", "").strip().lower()
+            if not s_name:
+                continue
+            t_picked = float(u.get("time", 0.0))
+            f_active = max(0.1, min(1.0, (duration - t_picked) / max(1.0, duration)))
+
+            # Role multiplier
+            tag = u.get("tag", "").lower()
+            if any(evo in s_name for evo in ["scald", "blizzard", "fire blast", "overheat", "sacred fire", "take down"]) or "evolution" in tag:
+                role_mult = 1.35
+            elif s_name in ["water gun", "ember", "ice beam", "hydro pump", "shadow ball", "flamethrower"]:
+                role_mult = 1.20
+            elif s_name in ["aqua ring", "sitrus berry", "berry", "sprint"]:
+                role_mult = 1.15
+            else:
+                role_mult = 0.90
+
+            skill_reward = base_run_reward * (0.35 + 0.65 * f_active) * role_mult
             old_r = skill_ratings.get(s_name, 1.0)
-            new_r = round((1.0 - 0.28) * old_r + (0.28 * run_reward), 3)
+            new_r = round((1.0 - 0.25) * old_r + (0.25 * skill_reward), 3)
             skill_ratings[s_name] = new_r
             delta = "+" if new_r >= old_r else ""
-            learned_skill_logs.append(f"{s_name.title()}: {new_r:.2f} ({delta}{new_r-old_r:.2f})")
+            learned_skill_logs.append(f"{s_name.title()}: {new_r:.2f} ({delta}{new_r-old_r:.2f}, active={f_active*100:.0f}%)")
 
-        upg["skill_ratings"] = skill_ratings
-
-        # Print detailed optimization report
-        print("\n📊 BẢNG CẬP NHẬT TRỌNG SỐ THÍCH ỨNG (POLICY WEIGHT GRADIENTS):")
-        for delta_msg in param_deltas:
-            print(f"  ⚡ {delta_msg}")
-        if learned_skill_logs:
-            print(f"  ⭐ Xếp hạng chiêu thức: {', '.join(learned_skill_logs)}")
+        self.current_policy.setdefault("upgrade", {})["skill_ratings"] = skill_ratings
 
         # --- 4. MULTI-MATCH EVALUATION BLOCK & STATISTICAL ROLLBACK ---
         eval_block = self.learning_state.setdefault("eval_block_runs", [])
-        eval_block.append(duration)
+        eval_block.append({
+            "duration": duration,
+            "score": score,
+            "level": level,
+            "damage_events": damage_events,
+            "swarm_damage_count": swarm_damage_count,
+            "wall_damage_count": wall_damage_count,
+            "hazard_damage_count": hazard_damage_count,
+            "encircle_rate": encircle_rate,
+            "last_stuck": last_stuck
+        })
+
         current_v = float(self.learning_state.get("current_policy_version", "5.0"))
-        
         is_rollback = False
         is_promoted = False
+        param_deltas = []
 
-        if len(eval_block) >= 3:
-            block_avg = sum(eval_block) / float(len(eval_block))
+        if len(eval_block) < 3:
+            print(f"📈 Khối đánh giá: Đã thu thập {len(eval_block)}/3 trận của chính sách v{current_v}. (Chính sách được giữ cố định để đo lường công bằng).")
+            if learned_skill_logs:
+                print(f"  ⭐ Xếp hạng kỹ năng trận này: {', '.join(learned_skill_logs)}")
+            self.memory.save_learning_state(self.learning_state)
+        else:
+            # Complete 3-run evaluation block under identical policy
+            block_avg = sum((r["duration"] if isinstance(r, dict) else float(r)) for r in eval_block) / float(len(eval_block))
             best_eval_avg = self.learning_state.get("best_eval_avg", 0.0)
-
             if best_eval_avg <= 0.0:
                 self.learning_state["best_eval_avg"] = block_avg
                 best_eval_avg = block_avg
@@ -204,34 +168,115 @@ class LearningEngine:
 
             # Check for regression (> 15% drop compared to best baseline)
             if block_avg < best_eval_avg * 0.85 and best_eval_avg > 60.0:
-                print(f"⚠️ [ROLLBACK] Chính sách mới làm giảm thời gian sống ({block_avg:.1f}s < {best_eval_avg:.1f}s). TỰ ĐỘNG ROLLBACK VỀ BEST POLICY!")
-                adapted_policy = copy.deepcopy(self.best_policy)
+                print(f"⚠️ [ROLLBACK] Chính sách v{current_v} làm giảm thời gian sống ({block_avg:.1f}s < {best_eval_avg:.1f}s). TỰ ĐỘNG ROLLBACK VỀ BEST POLICY!")
+                self.current_policy = copy.deepcopy(self.best_policy)
                 is_rollback = True
-            elif block_avg > best_eval_avg * 1.05:
-                # Verified statistical improvement across the 3-run block
-                new_v = round(current_v + 0.1, 1)
-                adapted_policy["version"] = str(new_v)
-                self.learning_state["current_policy_version"] = str(new_v)
-                self.learning_state["best_policy_version"] = str(new_v)
-                self.learning_state["best_eval_avg"] = block_avg
-                self.best_policy = copy.deepcopy(adapted_policy)
-                self.memory.save_best_policy(self.best_policy, score)
-                is_promoted = True
-                print(f"🏆 [THĂNG CẤP] Khối 3 trận đạt TB {block_avg:.1f}s (+{(block_avg-best_eval_avg):.1f}s)! Chính thức thăng cấp chính sách lên v{new_v}!")
+            else:
+                if block_avg > best_eval_avg * 1.05:
+                    new_v = round(current_v + 0.1, 1)
+                    self.current_policy["version"] = str(new_v)
+                    self.learning_state["current_policy_version"] = str(new_v)
+                    self.learning_state["best_policy_version"] = str(new_v)
+                    self.learning_state["best_eval_avg"] = block_avg
+                    self.best_policy = copy.deepcopy(self.current_policy)
+                    self.memory.save_best_policy(self.best_policy, score)
+                    is_promoted = True
+                    print(f"🏆 [THĂNG CẤP] Khối 3 trận đạt TB {block_avg:.1f}s (+{(block_avg-best_eval_avg):.1f}s)! Chính thức thăng cấp chính sách lên v{new_v}!")
 
-            # Reset evaluation block for next cycle
+                # Formulate next candidate policy using aggregated telemetry
+                adapted_policy = copy.deepcopy(self.current_policy)
+                mov = adapted_policy.setdefault("movement", {})
+                cur_danger_thresh = float(mov.get("danger_threshold", 160.0))
+                cur_mob_penalty = float(mov.get("mob_penalty_weight", 85.0))
+                cur_corridor_bonus = float(mov.get("mob_clear_corridor_bonus", 350.0))
+                cur_wall_avoid = float(mov.get("wall_avoidance_weight", 1.4))
+                cur_wall_thrust = float(mov.get("wall_breakout_thrust", 0.40))
+                cur_dodge_hold = float(mov.get("dodge_hold_duration", 0.35))
+                cur_dir_commit = float(mov.get("dir_commit_duration", 0.28))
+                cur_exp_weight = float(mov.get("exp_harvest_weight", 0.45))
+                cur_evasion = float(mov.get("evasion_weight", 0.95))
+
+                agg_swarm = sum(r.get("swarm_damage_count", 0) for r in eval_block if isinstance(r, dict))
+                agg_wall = sum(r.get("wall_damage_count", 0) for r in eval_block if isinstance(r, dict))
+                agg_hazard = sum(r.get("hazard_damage_count", 0) for r in eval_block if isinstance(r, dict))
+                agg_encircle = sum(r.get("encircle_rate", 0.0) for r in eval_block if isinstance(r, dict)) / float(max(1, len(eval_block)))
+                agg_stuck = any(r.get("last_stuck", False) for r in eval_block if isinstance(r, dict))
+
+                # Controlled Search with Parameter Ceiling Handling:
+                # Swarm Penalty & Corridor
+                if cur_mob_penalty >= 150.0 - 0.001:
+                    if agg_swarm > 0 or agg_encircle > 0.08:
+                        new_corridor = min(550.0, cur_corridor_bonus + 40.0)
+                        new_wall_thrust = min(0.55, cur_wall_thrust + 0.04)
+                        param_deltas.append(f"[TRẦN THAM SỐ] mob_penalty_weight đã đạt trần (150). Kích hoạt đòn bẩy phụ: corridor_bonus ({cur_corridor_bonus:.0f} -> {new_corridor:.0f}) & wall_thrust ({cur_wall_thrust:.2f} -> {new_wall_thrust:.2f}s)!")
+                        mov["mob_clear_corridor_bonus"] = new_corridor
+                        mov["wall_breakout_thrust"] = new_wall_thrust
+                elif agg_swarm > 0 or agg_encircle > 0.08:
+                    delta_mob = min(25.0, 5.0 + agg_swarm * 1.5)
+                    new_mob_pen = min(150.0, cur_mob_penalty + delta_mob)
+                    param_deltas.append(f"Trọng số phạt đâm quái (mob_penalty): {cur_mob_penalty:.0f} -> {new_mob_pen:.0f} (+{new_mob_pen - cur_mob_penalty:.0f})")
+                    mov["mob_penalty_weight"] = new_mob_pen
+
+                # Danger Threshold
+                if cur_danger_thresh >= 185.0 - 0.001:
+                    if agg_swarm > 0:
+                        new_commit = min(0.40, cur_dir_commit + 0.03)
+                        param_deltas.append(f"[TRẦN THAM SỐ] danger_threshold đã đạt trần (185px). Kích hoạt đòn bẩy phụ: dir_commit ({cur_dir_commit:.2f} -> {new_commit:.2f}s)!")
+                        mov["dir_commit_duration"] = new_commit
+                elif agg_swarm > 0 or agg_encircle > 0.08:
+                    delta_danger = min(12.0, 4.0 + agg_swarm * 1.0)
+                    new_danger = min(185.0, cur_danger_thresh + delta_danger)
+                    param_deltas.append(f"Vành đai an toàn (danger_threshold): {cur_danger_thresh:.0f}px -> {new_danger:.0f}px (+{new_danger - cur_danger_thresh:.0f}px)")
+                    mov["danger_threshold"] = new_danger
+
+                # Wall Avoidance & Thrust
+                if cur_wall_avoid >= 2.5 - 0.001:
+                    if agg_wall > 0 or agg_stuck:
+                        new_wall_thrust = min(0.55, cur_wall_thrust + 0.05)
+                        param_deltas.append(f"[TRẦN THAM SỐ] wall_avoidance_weight đã đạt trần (2.5). Kích hoạt đòn bẩy phụ: wall_thrust ({cur_wall_thrust:.2f} -> {new_wall_thrust:.2f}s)!")
+                        mov["wall_breakout_thrust"] = new_wall_thrust
+                elif agg_wall > 0 or agg_stuck:
+                    new_wall_avoid = min(2.5, cur_wall_avoid + 0.20)
+                    new_wall_thrust = min(0.52, cur_wall_thrust + 0.03)
+                    param_deltas.append(f"Độ né tránh góc tường (wall_avoidance): {cur_wall_avoid:.2f} -> {new_wall_avoid:.2f} (+0.20)")
+                    param_deltas.append(f"Lực phóng bứt vách (wall_breakout_thrust): {cur_wall_thrust:.2f}s -> {new_wall_thrust:.2f}s (+0.03s)")
+                    mov["wall_avoidance_weight"] = new_wall_avoid
+                    mov["wall_breakout_thrust"] = new_wall_thrust
+
+                # Evasion & Dodge Hold
+                if agg_hazard > 0:
+                    new_dodge_hold = min(0.45, cur_dodge_hold + 0.02)
+                    new_evasion = min(0.99, cur_evasion + 0.02)
+                    param_deltas.append(f"Thời gian giữ sải né đạn (dodge_hold): {cur_dodge_hold:.2f}s -> {new_dodge_hold:.2f}s (+0.02s)")
+                    mov["dodge_hold_duration"] = new_dodge_hold
+                    mov["evasion_weight"] = new_evasion
+
+                # EXP Acceleration
+                if block_avg > 75.0:
+                    new_exp = min(0.65, cur_exp_weight + 0.04)
+                    param_deltas.append(f"Ưu tiên hút ngọc EXP (exp_harvest_weight): {cur_exp_weight:.2f} -> {new_exp:.2f} (+0.04)")
+                    mov["exp_harvest_weight"] = new_exp
+
+                self.current_policy = adapted_policy
+
+            # Reset evaluation block runs for next 3-match cycle
             self.learning_state["eval_block_runs"] = []
-        else:
-            print(f"📈 Khối đánh giá: Đã thu thập {len(eval_block)}/3 trận của chính sách v{current_v}.")
+            self.memory.save_policy(self.current_policy)
+            self.memory.save_learning_state(self.learning_state)
+
+            if param_deltas:
+                print("\n📊 BẢNG CẬP NHẬT TRỌNG SỐ CHO KHỐI TIẾP THEO:")
+                for delta_msg in param_deltas:
+                    print(f"  ⚡ {delta_msg}")
+            if learned_skill_logs:
+                print(f"  ⭐ Xếp hạng kỹ năng: {', '.join(learned_skill_logs)}")
 
         if is_new_best and not is_rollback:
             self.learning_state["best_survival_time"] = max(best_duration, duration)
             self.learning_state["best_level"] = max(self.learning_state.get("best_level", 1), level)
+            self.memory.save_learning_state(self.learning_state)
 
-        self.current_policy = adapted_policy
-        self.memory.save_policy(self.current_policy)
-        self.memory.save_learning_state(self.learning_state)
-        print(f"💾 Đã cập nhật chính sách cho ván tiếp theo (v{self.current_policy.get('version', '5.0')}).")
+        print(f"💾 Chính sách sẵn sàng cho ván tiếp theo (v{self.current_policy.get('version', '5.0')}).")
         print("=" * 60 + "\n")
 
         analysis = {

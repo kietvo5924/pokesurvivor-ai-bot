@@ -12,14 +12,19 @@ class UpgradePolicy:
     - Chests: Prioritizes Rare Candy (+1 level) > Meta Upgrades > Gacha Tickets.
     """
     def __init__(self, policy_config: Dict[str, Any]):
-        self.active_pokemon: str = "Tapu Fini"
-        self.dex: int = 788
+        self.active_pokemon: str = "Unknown"
+        self.dex: Optional[int] = None
+        self.rush_primary_move: str = ""
+        self.acquired_moves: Dict[str, int] = {}
+        self.acquired_stats: List[str] = []
+        self.held_item: Optional[str] = None
+        self.bonded_groups: List[str] = []
         self.update_config(policy_config)
         self.reset_match()
 
-    def set_active_pokemon(self, name: str, starting_move: str = "", dex: Optional[int] = 0):
+    def set_active_pokemon(self, name: str, starting_move: str = "", dex: Optional[int] = None):
         """Dynamically adapts upgrade prioritization to the active Pokemon and its starter move."""
-        if name:
+        if name and name != "Unknown":
             self.active_pokemon = name
         if dex is not None and dex > 0:
             self.dex = dex
@@ -64,7 +69,7 @@ class UpgradePolicy:
     def choose_card(
         self,
         choices: List[Dict[str, Any]],
-        current_hp_ratio: float = 1.0,
+        current_hp_ratio: Optional[float] = None,
         current_skills: List[str] = None,
         modal_kind: str = "level-up"
     ) -> Optional[Dict[str, Any]]:
@@ -197,13 +202,13 @@ class UpgradePolicy:
         best_card["selection_reason"] = best_reason
         return best_card
 
-    def _choose_standard_upgrade(self, choices: List[Dict[str, Any]], current_hp_ratio: Optional[float] = 1.0) -> Dict[str, Any]:
+    def _choose_standard_upgrade(self, choices: List[Dict[str, Any]], current_hp_ratio: Optional[float] = None) -> Dict[str, Any]:
         """
         PokéSurvivor Dynamic Starter & Evolution Meta Picker:
         1. Golden Evolution Cards (Scald, Blizzard, Fire Blast, Overheat, Sacred Fire, Take Down) -> +2000
-        2. Emergency Sitrus Berry if HP < 50% -> +1500 (Saves match)
+        2. Emergency Sitrus Berry if HP < 50% -> +1500; Defensive heal if HP is unknown -> +650
         3. Core Buffs: Aqua Ring (+1250 for Tapu Fini passive regen), Swords Dance, Agility
-        4. Rush Starter Move (Water Gun / Ember) to Level 5 -> +1050
+        4. Rush Starter Move (Water Gun / Ember / detected starter) to Level 5 -> +1050
         5. Evolution Prerequisite Stat: 'Power' (attack) for Scald/Fire Blast -> +950
         6. Synergy Combos (Ice Beam + Power, Shadow Ball + Reflexes, Flamethrower + Reflexes)
         7. Essential Passives: Magnet (+XP Range), Learning (+XP), Sprint (+Speed)
@@ -216,6 +221,7 @@ class UpgradePolicy:
         has_vigor = "vigor" in self.acquired_stats
 
         is_damaged = (current_hp_ratio is not None and current_hp_ratio < 0.50)
+        is_unknown_hp = (current_hp_ratio is None)
 
         for card in choices:
             score = 10.0
@@ -236,10 +242,17 @@ class UpgradePolicy:
                 score += 2000.0
                 reasons.append("GOLDEN_EVOLUTION_MAX_PRIORITY")
 
-            # 2. EMERGENCY HP RECOVERY
-            elif is_damaged and ("sitrus berry" in name or "berry" in name or "heal" in desc or "recovery" in desc):
-                score += 1500.0
-                reasons.append("EMERGENCY_HEAL_LOW_HP")
+            # 2. HP RECOVERY & HEALING SELECTION
+            elif "sitrus berry" in name or "berry" in name or "heal" in desc or "recovery" in desc:
+                if is_damaged:
+                    score += 1500.0
+                    reasons.append("EMERGENCY_HEAL_LOW_HP")
+                elif is_unknown_hp:
+                    score += 850.0
+                    reasons.append("DEFENSIVE_HEAL_UNKNOWN_HP")
+                else:
+                    score += 150.0
+                    reasons.append("preventative_heal")
 
             # 3. CORE BUFF MOVES (Aqua Ring provides 1.6 HP/s up to 6.4 HP/s passive heal!)
             elif "aqua ring" in name:

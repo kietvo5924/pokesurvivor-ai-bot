@@ -1,5 +1,6 @@
 import unittest
 import time
+import numpy as np
 from pokesurvivor.perception import PerceptionEngine
 from pokesurvivor.movement_policy import MovementPolicy
 
@@ -29,6 +30,48 @@ class TestThreatTrackingAndEvasion(unittest.TestCase):
         self.assertLess(bullet["ttc"], 2.0)
         # Should detect as imminent threat since it's on a direct collision course
         self.assertTrue(bullet["is_imminent"])
+
+    def test_first_seen_bullet_does_not_assume_direct_player_velocity(self):
+        cx, cy = 640, 360
+        # Bullet seen for the very first time at (500, 360), player at (640, 360)
+        self.perception.prev_hazards = []
+        h_frame = [{"x": 500, "y": 360, "dist": 140.0, "type": "poison_bullet"}]
+        tracked = self.perception._track_hazards(h_frame, cx, cy)
+        self.assertEqual(len(tracked), 1)
+        # Without multi-frame velocity evidence, vx and vy MUST remain 0.0
+        self.assertEqual(tracked[0]["vx"], 0.0)
+        self.assertEqual(tracked[0]["vy"], 0.0)
+        self.assertEqual(tracked[0]["speed"], 0.0)
+
+    def test_ground_items_and_chests_never_in_enemies(self):
+        # Create a synthetic HSV frame with a golden chest and a regular purple enemy
+        hsv = np.zeros((720, 1280, 3), dtype=np.uint8)
+        # Background is walkable grass: H: 60, S: 150, V: 120
+        hsv[:, :] = [60, 150, 120]
+        
+        # 1. Golden chest at (400, 360), size 24x24 (aspect 1.0, area ~576), gold HSV: H=25, S=180, V=220
+        hsv[348:372, 388:412] = [25, 180, 220]
+
+        # 2. Purple monster at (800, 360), size 30x40, purple HSV: H=140, S=180, V=150
+        hsv[340:380, 785:815] = [140, 180, 150]
+
+        enemies, items = self.perception._detect_entities(hsv, 640, 360)
+        
+        # Verify items list has the chest
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["type"], "chest")
+        self.assertAlmostEqual(items[0]["x"], 400, delta=10)
+
+        # Verify enemies list has the monster
+        self.assertEqual(len(enemies), 1)
+        self.assertEqual(enemies[0]["type"], "enemy")
+        self.assertAlmostEqual(enemies[0]["x"], 800, delta=10)
+
+        # Crucial check: items MUST NOT be included in enemies list!
+        for e in enemies:
+            self.assertNotEqual(e.get("type"), "chest")
+            dist_to_chest = ((e["x"] - 400)**2 + (e["y"] - 360)**2)**0.5
+            self.assertGreater(dist_to_chest, 50.0)
 
     def test_multi_hazard_evasion_direction(self):
         cx, cy = 640, 360

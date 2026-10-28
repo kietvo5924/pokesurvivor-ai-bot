@@ -1,5 +1,5 @@
 {
-  "version": "9.7",
+  "version": "9.9",
   "description": "Meta Fire Blast & Rift Boss Hunting Loadout (1 Buff + 3 Attack)",
   "movement": {
     "pattern": "kiting",
@@ -51,27 +51,32 @@
     "skill_ratings": {
       "flamethrower": 6.075,
       "ember": 6.759,
-      "power": 7.101,
-      "reflexes": 9.45,
-      "magnet": 7.875,
+      "power": 18.627,
+      "reflexes": 11.034,
+      "magnet": 16.667,
       "revive": 5.633,
       "fire spin": 10.345,
-      "sitrus berry": 7.75,
-      "synthesis": 6.268,
-      "tackle": 10.095,
-      "sprint": 6.766,
+      "sitrus berry": 12.455,
+      "synthesis": 10.731,
+      "tackle": 18.009,
+      "sprint": 19.597,
       "flame wheel": 1.774,
       "harden": 5.463,
-      "swords dance": 6.874,
+      "swords dance": 13.412,
       "heat wave": 2.891,
       "will-o-wisp": 13.68,
-      "vigor": 5.215,
-      "learning": 6.727,
-      "armor": 8.745,
-      "aqua ring": 0.776,
-      "water gun": 0.615,
-      "focus": 3.093,
-      "hydro pump": 2.965
+      "vigor": 15.723,
+      "learning": 17.702,
+      "armor": 13.137,
+      "aqua ring": 13.321,
+      "water gun": 21.178,
+      "focus": 7.592,
+      "hydro pump": 8.813,
+      "agility": 4.95,
+      "water gun → water gun+": 13.023,
+      "disarming voice": 12.029,
+      "fairy wind": 7.314,
+      "hyper beam": 4.559
     }
   },
   "items": {
@@ -88,5 +93,5 @@
       "lucky-egg"
     ]
   },
-  "best_score": 719.0
+  "best_score": 1357.9
 }

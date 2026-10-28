@@ -27,6 +27,7 @@ scratch_scripts/
 *.jpg
 *.jpeg
 *.log
+!tests/fixtures/*.png
 
 # ==============================================================================
 # User Match Data (Keep base policy templates, ignore personal history)
@@ -34,6 +35,7 @@ scratch_scripts/
 data/run_history.jsonl
 data/metrics.csv
 data_backup/
+data_backup_round2/
 tests/test_data/
 
 # ==============================================================================

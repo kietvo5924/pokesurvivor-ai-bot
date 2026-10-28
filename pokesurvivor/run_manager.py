@@ -133,14 +133,19 @@ class RunManager:
         """Executes a single game match from start to game-over."""
         def on_solo_ready():
             partner = self.observer.get_selected_partner()
-            if partner:
-                p_name = partner.get("name", "Tapu Fini")
-                p_move = partner.get("starting_move", "Water Gun")
-                p_dex = partner.get("dex", 788)
-                print(f"[*] 🎯 Nhận diện Pokémon xuất trận: No. {p_dex} {p_name} | Chiêu đầu: '{p_move}'")
+            if partner and partner.get("name") and partner.get("name") != "Unknown":
+                p_name = partner.get("name")
+                p_move = partner.get("starting_move") or partner.get("startsWith") or ""
+                p_dex = partner.get("dex")
+                print(f"[*] 🎯 Nhận diện Pokémon xuất trận: No. {p_dex if p_dex else '?'} {p_name} | Chiêu đầu: '{p_move}'")
                 self.upgrade_policy.set_active_pokemon(p_name, starting_move=p_move, dex=p_dex)
                 self.state_tracker.set_active_pokemon(p_name)
                 self.perception.set_active_pokemon(p_name)
+            else:
+                print("[*] ⚠️ Chưa nhận diện được Pokémon cụ thể từ Solo screen. Sử dụng chiến lược thích ứng linh hoạt.")
+                self.upgrade_policy.set_active_pokemon("Unknown", starting_move="", dex=None)
+                self.state_tracker.set_active_pokemon("Unknown")
+                self.perception.set_active_pokemon("Unknown")
 
         print("[*] Đang vào trận Solo...")
         if not self.browser_ctrl.start_solo_game(on_solo_screen_callback=on_solo_ready):

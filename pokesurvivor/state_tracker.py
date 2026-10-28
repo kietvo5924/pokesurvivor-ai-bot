@@ -3,7 +3,7 @@ from typing import Dict, Any, List, Optional
 
 class StateTracker:
     def __init__(self):
-        self.active_pokemon = "Tapu Fini"
+        self.active_pokemon = "Unknown"
         self.reset()
 
     def set_active_pokemon(self, name: str):
@@ -23,7 +23,7 @@ class StateTracker:
         self.encircled_events: int = 0
         self.total_frames: int = 0
         self.min_distance_seen: float = 9999.0
-        self.last_hp: Optional[float] = 1.0
+        self.last_hp: Optional[float] = None
         self.last_hp_status: str = "UNKNOWN"
         self.last_danger_level = "LOW"
         self.last_enemies_count = 0
@@ -54,7 +54,7 @@ class StateTracker:
         hp_status = vision_state.get("hp_status", "UNKNOWN")
         self.last_hp_status = hp_status
 
-        if hp is not None and hp_status == "VERIFIED":
+        if hp is not None and hp_status in ("VERIFIED", "ESTIMATED"):
             self.hp_history.append(hp)
             if self.last_hp is not None and hp < self.last_hp - 0.08:
                 self.damage_events += 1
