@@ -255,7 +255,7 @@ class PerceptionEngine:
         obs[h-60:, :] = 0
 
         # Mask out player body (radius 30px) so Scorbunny never blocks itself!
-        cv2.circle(obs, (cx, cy), 30, 0, -1)
+        cv2.circle(obs, (int(round(float(cx))), int(round(float(cy)))), 30, 0, -1)
         return obs
 
     def _probe_sector_obstacles(self, obstacle_mask: np.ndarray, cx: int, cy: int) -> Tuple[Dict[str, bool], Dict[str, float]]:
@@ -497,7 +497,7 @@ class PerceptionEngine:
         gem_mask[h-55:, :] = 0
 
         # Don't count near player sprite
-        cv2.circle(gem_mask, (cx, cy), 46, 0, -1)
+        cv2.circle(gem_mask, (int(round(float(cx))), int(round(float(cy)))), 46, 0, -1)
 
         contours, _ = cv2.findContours(gem_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         gems = []
@@ -568,8 +568,9 @@ class PerceptionEngine:
         m_poison[h-70:, :] = 0
 
         # Exclude player core sprite and own fire launch origin (radius 52px)
-        cv2.circle(m_zones, (cx, cy), 52, 0, -1)
-        cv2.circle(m_poison, (cx, cy), 52, 0, -1)
+        icx, icy = int(round(float(cx))), int(round(float(cy)))
+        cv2.circle(m_zones, (icx, icy), 52, 0, -1)
+        cv2.circle(m_poison, (icx, icy), 52, 0, -1)
 
         hazards = []
 
@@ -731,7 +732,7 @@ class PerceptionEngine:
         entities_mask[h-70:, :] = 0
 
         # 5. Mask out player center (Scorbunny body, long ears, feet, shadow, radius 52px)
-        cv2.circle(entities_mask, (cx, cy), 52, 0, -1)
+        cv2.circle(entities_mask, (int(round(float(cx))), int(round(float(cy)))), 52, 0, -1)
 
         # 6. Morphological opening to clean up speckle noise
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
@@ -884,7 +885,7 @@ class PerceptionEngine:
         mask_purple = cv2.inRange(hsv, lower_purple, upper_purple)
 
         # Mask out player center
-        cv2.circle(mask_purple, (cx, cy), 50, 0, -1)
+        cv2.circle(mask_purple, (int(round(float(cx))), int(round(float(cy)))), 50, 0, -1)
 
         # Mask out topbar HUD
         mask_purple[:65, :] = 0
@@ -993,40 +994,87 @@ class PerceptionEngine:
 
         overlay = frame.copy()
         h, w = overlay.shape[:2]
-        cx, cy = vision_state.get("player_pos", (w // 2, h // 2))
+
+        # 1. Resolve screen-space player coordinates as strict integers
+        player_obj = vision_state.get("player") or {}
+        if player_obj.get("screen_x") is not None and player_obj.get("screen_y") is not None:
+            raw_cx = player_obj.get("screen_x")
+            raw_cy = player_obj.get("screen_y")
+        elif "player_pos" in vision_state:
+            pos = vision_state["player_pos"]
+            if isinstance(pos, (tuple, list)) and len(pos) >= 2:
+                if vision_state.get("coord_space") == "world":
+                    raw_cx = player_obj.get("screen_x", w // 2)
+                    raw_cy = player_obj.get("screen_y", h // 2)
+                else:
+                    raw_cx, raw_cy = pos[0], pos[1]
+            else:
+                raw_cx, raw_cy = w // 2, h // 2
+        else:
+            raw_cx, raw_cy = w // 2, h // 2
+
+        try:
+            cx = int(round(float(raw_cx)))
+            cy = int(round(float(raw_cy)))
+        except (ValueError, TypeError):
+            cx, cy = w // 2, h // 2
 
         # 1. Player Marker
         cv2.circle(overlay, (cx, cy), 28, (0, 255, 255), 2)
         cv2.circle(overlay, (cx, cy), 4, (0, 255, 255), -1)
-        cv2.putText(overlay, f"PLAYER ({cx},{cy})", (cx - 45, cy - 35),
+        cv2.putText(overlay, f"PLAYER ({cx},{cy})", (int(cx - 45), int(cy - 35)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 255), 1, cv2.LINE_AA)
 
         # 2. HP HUD Bar Bounding Box
         hp_info = self.last_hp_result
         if hp_info and hp_info.get("box"):
-            bx, by, bw, bh = hp_info["box"]
-            color = (0, 255, 0) if hp_info.get("status") == "VERIFIED" else (0, 165, 255)
-            cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), color, 2)
-            ratio_val = hp_info.get("hp_ratio")
-            r_str = f"{ratio_val*100:.0f}%" if ratio_val is not None else "N/A"
-            cv2.putText(overlay, f"HP: {r_str} [{hp_info.get('status', 'UNKNOWN')}]",
-                        (bx, max(12, by - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+            try:
+                bx, by, bw, bh = [int(round(float(v))) for v in hp_info["box"]]
+                color = (0, 255, 0) if hp_info.get("status") == "VERIFIED" else (0, 165, 255)
+                cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), color, 2)
+                ratio_val = hp_info.get("hp_ratio")
+                r_str = f"{ratio_val*100:.0f}%" if ratio_val is not None else "N/A"
+                cv2.putText(overlay, f"HP: {r_str} [{hp_info.get('status', 'UNKNOWN')}]",
+                            (bx, max(12, by - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+            except Exception:
+                pass
 
         # 3. Enemies with Distance Tags
         for e in vision_state.get("enemies", [])[:18]:
-            ex, ey = int(e["x"]), int(e["y"])
-            edist = e.get("dist", 0.0)
+            ex_val = e.get("screen_x") if e.get("screen_x") is not None else e.get("x")
+            ey_val = e.get("screen_y") if e.get("screen_y") is not None else e.get("y")
+            if ex_val is None or ey_val is None:
+                continue
+            try:
+                ex = int(round(float(ex_val)))
+                ey = int(round(float(ey_val)))
+            except (ValueError, TypeError):
+                continue
+            if not (-50 <= ex <= w + 50 and -50 <= ey <= h + 50):
+                continue
+            edist = float(e.get("dist", 0.0))
             cv2.circle(overlay, (ex, ey), 16, (0, 140, 255), 2)
             if edist < 220:
-                cv2.putText(overlay, f"{edist:.0f}px", (ex - 16, ey - 18),
+                cv2.putText(overlay, f"{edist:.0f}px", (int(ex - 16), int(ey - 18)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 140, 255), 1, cv2.LINE_AA)
 
         # 4. Hazards & Bullets with Trajectory Arrows and TTC
         for hz in vision_state.get("hazards", []):
-            hx, hy = int(hz["x"]), int(hz["y"])
-            vx, vy = hz.get("vx", 0.0), hz.get("vy", 0.0)
-            ttc = hz.get("ttc", 99.0)
-            is_imm = hz.get("is_imminent", False)
+            hx_val = hz.get("screen_x") if hz.get("screen_x") is not None else hz.get("x")
+            hy_val = hz.get("screen_y") if hz.get("screen_y") is not None else hz.get("y")
+            if hx_val is None or hy_val is None:
+                continue
+            try:
+                hx = int(round(float(hx_val)))
+                hy = int(round(float(hy_val)))
+            except (ValueError, TypeError):
+                continue
+            if not (-50 <= hx <= w + 50 and -50 <= hy <= h + 50):
+                continue
+            vx = float(hz.get("vx", 0.0))
+            vy = float(hz.get("vy", 0.0))
+            ttc = float(hz.get("ttc", 99.0))
+            is_imm = bool(hz.get("is_imminent", False))
             hz_color = (0, 0, 255) if is_imm else (255, 0, 255)
             cv2.circle(overlay, (hx, hy), 14, hz_color, 2)
             if is_imm:
@@ -1034,10 +1082,10 @@ class PerceptionEngine:
 
             # Arrow indicating hazard movement velocity
             if abs(vx) > 5 or abs(vy) > 5:
-                cv2.arrowedLine(overlay, (hx, hy), (int(hx + vx * 0.35), int(hy + vy * 0.35)),
+                cv2.arrowedLine(overlay, (hx, hy), (int(round(hx + vx * 0.35)), int(round(hy + vy * 0.35))),
                                 hz_color, 2, tipLength=0.3)
             if ttc < 5.0:
-                cv2.putText(overlay, f"TTC:{ttc:.1f}s", (hx - 22, hy - 16),
+                cv2.putText(overlay, f"TTC:{ttc:.1f}s", (int(hx - 22), int(hy - 16)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, hz_color, 1, cv2.LINE_AA)
 
         # 5. Chosen Movement Direction Arrow
@@ -1049,10 +1097,10 @@ class PerceptionEngine:
             deg = dir_angles.get(chosen_dir, 0)
             rad = math.radians(deg)
             arrow_len = 65
-            ax = int(cx + arrow_len * math.cos(rad))
-            ay = int(cy + arrow_len * math.sin(rad))
+            ax = int(round(cx + arrow_len * math.cos(rad)))
+            ay = int(round(cy + arrow_len * math.sin(rad)))
             cv2.arrowedLine(overlay, (cx, cy), (ax, ay), (0, 255, 0), 3, tipLength=0.25)
-            cv2.putText(overlay, f"MOVE: {chosen_dir}", (ax + 10, ay + 5),
+            cv2.putText(overlay, f"MOVE: {chosen_dir}", (int(ax + 10), int(ay + 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
 
         # 6. Telemetry HUD Dashboard Overlay
@@ -1062,16 +1110,16 @@ class PerceptionEngine:
             f"PARTNER : {getattr(self, 'active_pokemon', 'Unknown')}",
             f"DANGER  : {vision_state.get('danger_level', 'LOW')}",
             f"HP      : {hp_display} ({vision_state.get('hp_status', 'UNKNOWN')})",
-            f"ENEMIES : {vision_state.get('enemies_count', 0)} | HAZARDS: {vision_state.get('hazards_count', 0)}",
+            f"ENEMIES : {vision_state.get('enemies_count', len(vision_state.get('enemies', [])))} | HAZARDS: {vision_state.get('hazards_count', len(vision_state.get('hazards', [])))}",
             f"ENCIRCLE: {vision_state.get('is_encircled', False)} | STUCK: {vision_state.get('is_stuck', False)}",
             f"CONFID. : {vision_state.get('confidence', 0.85)*100:.0f}%"
         ]
 
-        box_top = max(0, h - 145)
-        cv2.rectangle(overlay, (10, box_top), (340, h - 10), (0, 0, 0), -1)
-        cv2.rectangle(overlay, (10, box_top), (340, h - 10), (0, 255, 255), 1)
+        box_top = max(0, int(round(h - 145)))
+        cv2.rectangle(overlay, (10, box_top), (340, int(round(h - 10))), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (10, box_top), (340, int(round(h - 10))), (0, 255, 255), 1)
         for i, line in enumerate(status_lines):
-            cv2.putText(overlay, line, (18, box_top + 20 + i * 20),
+            cv2.putText(overlay, line, (18, int(round(box_top + 20 + i * 20))),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
 
         try:
