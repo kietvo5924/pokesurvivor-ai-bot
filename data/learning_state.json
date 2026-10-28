@@ -1,12 +1,10 @@
 {
-  "total_runs": 126,
+  "total_runs": 128,
   "current_policy_version": "10.3",
   "best_policy_version": "10.3",
   "best_survival_time": 390.6,
   "best_level": 36,
   "recent_scores": [
-    741.7,
-    895.75,
     620.3,
     1370.65,
     536.5,
@@ -24,315 +22,181 @@
     1014.0,
     997.0,
     1705.0,
-    781.0
+    781.0,
+    1080.0,
+    1123.5
   ],
   "consecutive_drops": 0,
   "skill_ratings": {
     "flamethrower": 6.075,
     "ember": 6.759,
-    "power": 5.279,
-    "reflexes": 5.605,
-    "magnet": 5.493,
-    "revive": 10.993,
+    "power": 4.127,
+    "reflexes": 7.36,
+    "magnet": 4.926,
+    "revive": 10.397,
     "fire spin": 10.345,
     "sitrus berry": 14.586,
     "synthesis": 9.678,
     "tackle": 5.915,
-    "sprint": 8.036,
+    "sprint": 6.247,
     "flame wheel": 1.774,
-    "harden": 9.044,
-    "swords dance": 8.049,
+    "harden": 8.246,
+    "swords dance": 7.152,
     "heat wave": 2.891,
     "will-o-wisp": 13.68,
-    "vigor": 7.165,
-    "learning": 10.711,
-    "armor": 7.952,
+    "vigor": 6.177,
+    "learning": 11.029,
+    "armor": 6.401,
     "aqua ring": 12.092,
-    "water gun": 9.834,
-    "focus": 5.321,
-    "hydro pump": 13.376,
-    "agility": 6.955,
+    "water gun": 10.351,
+    "focus": 6.93,
+    "hydro pump": 10.898,
+    "agility": 7.031,
     "water gun -> water gun+": 23.348,
     "disarming voice": 7.676,
-    "fairy wind": 8.787,
-    "hyper beam": 5.536,
+    "fairy wind": 8.332,
+    "hyper beam": 5.223,
     "hydro pump -> hydro pump+": 12.326,
     "disarming voice -> disarming voice+": 7.332,
     "bubble": 2.623,
-    "water gun → water gun+": 7.877,
-    "substitute": 4.969,
-    "sniper": 7.514
+    "water gun → water gun+": 7.059,
+    "substitute": 4.572,
+    "sniper": 7.7
   },
   "eval_block_runs": [
     {
-      "run_id": 125,
+      "run_id": 128,
       "policy_version": "10.3",
-      "policy_hash": "206a0b4d2f",
+      "policy_hash": "33dc6a1382",
       "pokemon": "Tapu Fini",
-      "game_score": 930,
+      "game_score": 303,
       "game_score_source": "dom_results_kills",
-      "survival_time": 385.0,
+      "survival_time": 186.0,
       "survival_time_source": "dom_results_time",
-      "max_level": 23,
+      "max_level": 17,
       "max_level_source": "dom_results_level",
-      "fitness_score": 1705.0,
+      "fitness_score": 1123.5,
       "fitness_score_source": "internal_composite_formula",
-      "duration": 385.0,
-      "damage_events": 179,
-      "swarm_damage_count": 140,
-      "wall_damage_count": 123,
-      "hazard_damage_count": 178,
-      "encircle_rate": 0.3235101506221349,
+      "duration": 186.0,
+      "damage_events": 49,
+      "swarm_damage_count": 48,
+      "wall_damage_count": 27,
+      "hazard_damage_count": 47,
+      "encircle_rate": 0.2534750613246116,
       "last_stuck": false,
       "end_reason": "defeated",
       "upgrades": [
         {
           "modal_kind": "level-up",
           "level": 2,
-          "name": "Water Gun",
-          "tag": "Lv.1 > 2",
-          "time": 36.0
+          "name": "Swords Dance",
+          "tag": "New · Normal",
+          "time": 44.8
         },
         {
           "modal_kind": "level-up",
           "level": 3,
-          "name": "Revive",
-          "tag": "Revive",
-          "time": 44.6
+          "name": "Swords Dance",
+          "tag": "Lv.1 > 2",
+          "time": 47.2
         },
         {
           "modal_kind": "level-up",
           "level": 4,
-          "name": "Harden",
-          "tag": "New · Normal",
-          "time": 49.5
+          "name": "Water Gun",
+          "tag": "Lv.1 > 2",
+          "time": 51.1
         },
         {
           "modal_kind": "level-up",
           "level": 5,
-          "name": "Agility",
-          "tag": "New · Normal",
-          "time": 57.6
+          "name": "Hydro Pump",
+          "tag": "New · Water",
+          "time": 62.2
         },
         {
           "modal_kind": "level-up",
           "level": 6,
-          "name": "Harden",
-          "tag": "Lv.1 > 2",
-          "time": 74.1
+          "name": "Water Gun",
+          "tag": "Lv.2 > 3",
+          "time": 76.4
         },
         {
           "modal_kind": "level-up",
           "level": 7,
-          "name": "Learning",
-          "tag": "Rare",
-          "time": 92.8
+          "name": "Hydro Pump",
+          "tag": "Lv.1 > 2",
+          "time": 87.3
         },
         {
           "modal_kind": "level-up",
           "level": 8,
-          "name": "Water Gun",
-          "tag": "Lv.2 > 3",
-          "time": 127.5
+          "name": "Armor",
+          "tag": "Common",
+          "time": 99.7
         },
         {
           "modal_kind": "level-up",
           "level": 9,
-          "name": "Learning",
-          "tag": "Common",
-          "time": 149.1
+          "name": "Water Gun",
+          "tag": "Lv.3 > 4",
+          "time": 103.3
         },
         {
           "modal_kind": "level-up",
           "level": 10,
-          "name": "Sniper",
-          "tag": "Rare",
-          "time": 195.5
+          "name": "Hydro Pump",
+          "tag": "Lv.2 > 3",
+          "time": 109.1
         },
         {
           "modal_kind": "level-up",
           "level": 11,
           "name": "Water Gun",
-          "tag": "Lv.3 > 4",
-          "time": 211.8
+          "tag": "Lv.4 > 5",
+          "time": 115.6
         },
         {
           "modal_kind": "level-up",
           "level": 12,
-          "name": "Agility",
-          "tag": "Lv.1 > 2",
-          "time": 214.0
+          "name": "Swords Dance",
+          "tag": "Lv.2 > 3",
+          "time": 129.1
         },
         {
           "modal_kind": "level-up",
           "level": 13,
-          "name": "Water Gun",
-          "tag": "Lv.4 > 5",
-          "time": 220.4
+          "name": "Swords Dance",
+          "tag": "Lv.3 > 4",
+          "time": 148.7
         },
         {
           "modal_kind": "level-up",
           "level": 14,
-          "name": "Harden",
-          "tag": "Lv.2 > 3",
-          "time": 235.5
+          "name": "Swords Dance",
+          "tag": "Lv.4 > 5",
+          "time": 161.2
         },
         {
           "modal_kind": "level-up",
           "level": 15,
-          "name": "Harden",
-          "tag": "Lv.3 > 4",
-          "time": 244.9
+          "name": "Power",
+          "tag": "Epic",
+          "time": 173.5
         },
         {
           "modal_kind": "level-up",
           "level": 16,
-          "name": "Power",
-          "tag": "Common",
-          "time": 269.1
+          "name": "Water Gun → Water Gun+",
+          "tag": "EVOLUTION",
+          "time": 187.7
         },
         {
           "modal_kind": "level-up",
           "level": 17,
-          "name": "Water Gun → Water Gun+",
-          "tag": "EVOLUTION",
-          "time": 285.0
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 18,
-          "name": "Agility",
-          "tag": "Lv.2 > 3",
-          "time": 290.1
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 19,
-          "name": "Agility",
-          "tag": "Lv.3 > 4",
-          "time": 304.6
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 20,
           "name": "Armor",
-          "tag": "Common",
-          "time": 316.3
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 21,
-          "name": "Harden",
-          "tag": "Lv.4 > 5",
-          "time": 341.3
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 22,
-          "name": "Power",
-          "tag": "Common",
-          "time": 393.7
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 23,
-          "name": "Magnet",
-          "tag": "Common",
-          "time": 399.7
-        }
-      ]
-    },
-    {
-      "run_id": 126,
-      "policy_version": "10.3",
-      "policy_hash": "206a0b4d2f",
-      "pokemon": "Tapu Fini",
-      "game_score": 139,
-      "game_score_source": "dom_results_kills",
-      "survival_time": 126.0,
-      "survival_time_source": "dom_results_time",
-      "max_level": 11,
-      "max_level_source": "dom_results_level",
-      "fitness_score": 781.0,
-      "fitness_score_source": "internal_composite_formula",
-      "duration": 126.0,
-      "damage_events": 18,
-      "swarm_damage_count": 16,
-      "wall_damage_count": 8,
-      "hazard_damage_count": 17,
-      "encircle_rate": 0.2757318224740321,
-      "last_stuck": false,
-      "end_reason": "defeated",
-      "upgrades": [
-        {
-          "modal_kind": "level-up",
-          "level": 2,
-          "name": "Fairy Wind",
-          "tag": "New · Fairy",
-          "time": 30.0
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 3,
-          "name": "Fairy Wind",
-          "tag": "Lv.1 > 2",
-          "time": 34.4
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 4,
-          "name": "Water Gun",
-          "tag": "Lv.1 > 2",
-          "time": 36.2
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 5,
-          "name": "Water Gun",
-          "tag": "Lv.2 > 3",
-          "time": 50.1
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 6,
-          "name": "Substitute",
-          "tag": "New · Normal",
-          "time": 54.4
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 7,
-          "name": "Fairy Wind",
-          "tag": "Lv.2 > 3",
-          "time": 60.5
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 8,
-          "name": "Substitute",
-          "tag": "Lv.1 > 2",
-          "time": 80.1
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 9,
-          "name": "Water Gun",
-          "tag": "Lv.3 > 4",
-          "time": 90.2
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 10,
-          "name": "Power",
-          "tag": "Rare",
-          "time": 106.1
-        },
-        {
-          "modal_kind": "level-up",
-          "level": 11,
-          "name": "Substitute",
-          "tag": "Lv.2 > 3",
-          "time": 118.4
+          "tag": "Legendary",
+          "time": 205.7
         }
       ]
     }

@@ -221,7 +221,7 @@ class RunManager:
         last_zmove_time = 0.0
         last_consumable_time = 0.0
         has_rerolled_this_choice = False
-        vision_state = None
+        unified_state = None
         dom_results = None
 
         while self.is_running and not self.emergency_stopped:
@@ -233,19 +233,37 @@ class RunManager:
                 self.state_tracker.end_reason = "timeout"
                 break
 
-            # 3. Read DOM state
-            dom_state = self.observer.read_dom_state()
+            # 1. Capture visual frame (ultra-fast toDataURL)
+            now_t = time.time()
+            frame = None
+            if now_t - last_vision_time >= 0.08 or unified_state is None:
+                frame = self.observer.capture_frame()
+                last_vision_time = now_t
+
+            # 2. Read Harmonized Unified State (window.G, Canvas telemetry hook, DOM, OpenCV)
+            unified_state = self.game_state_adapter.read_unified_state(
+                frame_img=frame,
+                is_moving=bool(active_keys)
+            )
+
+            # 3. Extract UI & Phase
+            dom_state = unified_state.get("ui", {})
             phase = dom_state.get("phase", "running")
-            exit_available = dom_state.get("exitAvailable", False)
+            exit_available = dom_state.get("exit_available", False)
+            metrics = unified_state.get("metrics", {})
 
             # Check match end
-            if phase == "ended" or exit_available:
+            if phase == "ended" or exit_available or metrics.get("is_match_over"):
                 print(f"[*] Trận đấu kết thúc! Phase: {phase}")
-                # Wait for results modal to mount (game client uses ~900ms setTimeout before showing results)
                 wait_results_start = time.time()
                 while time.time() - wait_results_start < 2.5:
                     dom_results = self.observer.read_match_results()
                     if dom_results and dom_results.get("available"):
+                        break
+                    # Also check unified_state metrics
+                    fresh_metrics = self.game_state_adapter._extract_metrics(self.game_state_adapter._fetch_browser_data())
+                    if fresh_metrics.get("is_match_over"):
+                        dom_results = fresh_metrics
                         break
                     time.sleep(0.25)
 
@@ -256,16 +274,15 @@ class RunManager:
                 break
 
             # 4. Handle Modals: Level Up, Rift Boss Bond/Fusion, Item Swap, or Chest
-            if dom_state.get("choiceOpen"):
-                # Release movement keys during modal
+            if dom_state.get("choice_open"):
                 self.browser_ctrl.release_all_keys()
                 active_keys = []
                 choices = dom_state.get("choices", [])
-                modal_kind = dom_state.get("modalKind", "level-up")
-                modal_title = dom_state.get("modalTitle", "")
-                
+                modal_kind = dom_state.get("modal_kind", "level-up")
+                modal_title = dom_state.get("modal_title", "")
+
                 print(f"[{elapsed:.1f}s] 🌟 GIAO DIỆN [{modal_kind.upper()}]: '{modal_title}' ({len(choices)} lựa chọn)")
-                
+
                 if choices:
                     best_card = self.upgrade_policy.choose_card(
                         choices,
@@ -297,7 +314,6 @@ class RunManager:
                         has_rerolled_this_choice = False
                         print(f"  -> Bot chọn: '{best_card.get('name')}' ({best_card.get('tag')}) - Lý do: {best_card.get('selection_reason')}")
                         if not self.observe_only and not self.is_paused:
-                            # Try clicking selector and pressing number key
                             self.browser_ctrl.click_selector(best_card.get("selector"))
                             key = best_card.get("key", "1")
                             if key:
@@ -305,10 +321,9 @@ class RunManager:
                         self.state_tracker.record_upgrade(
                             best_card,
                             modal_kind=modal_kind,
-                            verified_level=dom_state.get("verifiedLevel")
+                            verified_level=dom_state.get("verified_level")
                         )
 
-                        # Actively wait until the choice modal is completely closed to prevent duplicate processing
                         modal_wait_start = time.time()
                         while time.time() - modal_wait_start < 1.6:
                             time.sleep(0.08)
@@ -317,57 +332,48 @@ class RunManager:
                                 break
                 continue
 
-            # 5. Capture visual frame (ultra-fast toDataURL without screen jitter)
-            now_t = time.time()
-            if now_t - last_vision_time >= 0.08 or vision_state is None:
-                frame = self.observer.capture_frame()
-                if frame is not None:
-                    vision_state = self.perception.analyze_frame(frame, is_moving=bool(active_keys))
-                    last_vision_time = now_t
+            # 5. Update State Tracker with Unified State
+            self.state_tracker.update(dom_state, unified_state)
 
-            if vision_state:
-                self.state_tracker.update(dom_state, vision_state)
+            # Announce Purple Rift Portal
+            rift_target = unified_state.get("rift_target")
+            if rift_target and (now_t - last_rift_log_time > 8.0):
+                t_type = rift_target.get("type", "portal")
+                if t_type == "portal" and elapsed > 120.0 and self.state_tracker.current_level >= 3:
+                    print(f"[{elapsed:.1f}s] 🌀 CỔNG RIFT TÍM: Đủ cấp và thực lực! Tiến vào cổng {rift_target.get('sector')} diệt Boss săn quà...")
+                else:
+                    print(f"[{elapsed:.1f}s] 🌀 CỔNG RIFT TÍM: Mũi tên chỉ hướng {rift_target.get('sector')} (Tiếp tục kiting farm ngọc EXP & tích lũy tiến hóa)")
+                last_rift_log_time = now_t
 
-                # Announce Purple Rift Portal
-                rift_target = vision_state.get("rift_target")
-                if rift_target and (now_t - last_rift_log_time > 8.0):
-                    t_type = rift_target.get("type", "portal")
-                    if t_type == "portal" and elapsed > 120.0 and self.state_tracker.current_level >= 3:
-                        print(f"[{elapsed:.1f}s] 🌀 CỔNG RIFT TÍM: Đủ cấp và thực lực! Tiến vào cổng {rift_target.get('sector')} diệt Boss săn quà...")
-                    else:
-                        print(f"[{elapsed:.1f}s] 🌀 CỔNG RIFT TÍM: Mũi tên chỉ hướng {rift_target.get('sector')} (Tiếp tục kiting farm ngọc EXP & tích lũy tiến hóa)")
-                    last_rift_log_time = now_t
+            # Announce Boss Arena Combat
+            boss_info = unified_state.get("boss_info", {})
+            if boss_info.get("active") and (now_t - last_boss_log_time > 8.0):
+                print(f"[{elapsed:.1f}s] ⚔️ ĐANG ĐÁNH BOSS! Kiting vòng tròn quanh Boss và auto-aim xả chiêu...")
+                last_boss_log_time = now_t
 
-                # Announce Boss Arena Combat
-                boss_info = vision_state.get("boss_info", {})
-                if boss_info.get("active") and (now_t - last_boss_log_time > 8.0):
-                    print(f"[{elapsed:.1f}s] ⚔️ ĐANG ĐÁNH BOSS! Kiting vòng tròn quanh Boss và auto-aim xả chiêu...")
-                    last_boss_log_time = now_t
-
-            # 6. Movement decision & execution with Obstacle Avoidance & Dodging
-            if not self.observe_only and not self.is_paused and vision_state:
+            # 6. Movement decision & execution driven by Unified State
+            if not self.observe_only and not self.is_paused and phase == "running":
                 dir_name, target_keys, step_dur = self.movement_policy.select_movement(
-                    vision_state,
+                    unified_state,
                     current_level=self.state_tracker.current_level,
                     elapsed_time=elapsed
                 )
-                
-                # Check for critical tactical events to log
-                min_e_dist = vision_state.get("min_enemy_dist", 9999.0)
-                e_sec = vision_state.get("nearest_enemy_sector", "?")
-                hazards = vision_state.get("hazards", [])
-                sector_obstacles = vision_state.get("sector_obstacles", {})
+
+                min_e_dist = unified_state.get("min_enemy_dist", 9999.0)
+                e_sec = unified_state.get("nearest_enemy_sector", "?")
+                hazards = unified_state.get("hazards", [])
+                sector_obstacles = unified_state.get("sector_obstacles", {})
                 blocked_walls = [s for s, b in sector_obstacles.items() if b]
 
-                # Wall / Dead-end breakout alert
-                if len(blocked_walls) >= 1 and (min_e_dist < 210.0 or vision_state.get("is_encircled", False)) and (now_t - last_buffer_log_time > 2.5):
-                    fewest_mobs = vision_state.get("sector_enemy_counts", {}).get(dir_name, 0)
+                # Wall breakout alert
+                if len(blocked_walls) >= 1 and (min_e_dist < 210.0 or unified_state.get("is_encircled", False)) and (now_t - last_buffer_log_time > 2.5):
+                    fewest_mobs = unified_state.get("sector_enemy_counts", {}).get(dir_name, 0)
                     print(f"[{elapsed:.1f}s] 💥 PHÁ VÒNG VÂY TƯỜNG CỤT: Tường chặn {blocked_walls}! Lao đầu bứt tốc hướng {dir_name} ({fewest_mobs} quái - đường thoáng nhất) thoát hiểm!")
                     last_buffer_log_time = now_t
 
                 # Encirclement breakout alert
-                elif vision_state.get("is_encircled", False) and (now_t - last_buffer_log_time > 2.5):
-                    fewest_mobs = vision_state.get("sector_enemy_counts", {}).get(dir_name, 0)
+                elif unified_state.get("is_encircled", False) and (now_t - last_buffer_log_time > 2.5):
+                    fewest_mobs = unified_state.get("sector_enemy_counts", {}).get(dir_name, 0)
                     print(f"[{elapsed:.1f}s] ⚡ ĐỘT PHÁ VÒNG VÂY: Quái vây quanh! Bứt tốc hướng {dir_name} ({fewest_mobs} quái - hướng thoáng nhất) thoát hiểm!")
                     last_buffer_log_time = now_t
 
@@ -383,19 +389,21 @@ class RunManager:
                     print(f"[{elapsed:.1f}s] 🛡️ GIỮ CỰ LY (REPULSION): Quái áp sát {min_e_dist:.0f}px hướng {e_sec}! Kích hoạt lực đẩy phản xạ lùi hướng {dir_name} duy trì cự ly an toàn!")
                     last_buffer_log_time = now_t
 
-                # Regular tactical telemetry every 4.0 seconds
+                # Regular tactical telemetry with explicit source and confidence
                 elif now_t - last_status_log_time > 4.0:
-                    n_enemies = vision_state.get("enemies_count", 0)
+                    n_enemies = len(unified_state.get("enemies", []))
                     n_hazards = len(hazards)
-                    hp_r = vision_state.get("hp_ratio")
-                    hp_str = f"{hp_r*100:.0f}% ({vision_state.get('hp_status', 'UNKNOWN')})" if hp_r is not None else "UNKNOWN"
+                    hp_r = unified_state["player"].get("hp_ratio")
+                    hp_src = unified_state["sources"].get("player", "unobserved")
+                    conf = unified_state.get("confidence", 0.0)
+                    hp_str = f"{hp_r*100:.0f}%" if hp_r is not None else "UNKNOWN"
                     dist_str = f"{min_e_dist:.0f}px ({e_sec})" if min_e_dist < 9000 else "Không có quái gần"
-                    print(f"[{elapsed:.1f}s] 🏃 Kiting: Hướng {dir_name} | Quái gần nhất: {dist_str} | Quái quanh vùng: {n_enemies} | Đạn: {n_hazards} | HP: {hp_str}")
+                    print(f"[{elapsed:.1f}s] 🏃 Kiting: Hướng {dir_name} | Quái gần nhất: {dist_str} | Quái: {n_enemies} | Đạn: {n_hazards} | HP: {hp_str} (Nguồn: {hp_src}, Tin cậy: {conf*100:.0f}%)")
                     last_status_log_time = now_t
 
                 # Periodically render and save annotated debug visual overlay
                 if frame is not None and (now_t - last_overlay_time > 4.0 or (hazards and hazards[0].get("is_imminent", False))):
-                    self.perception.create_debug_overlay(frame, vision_state, chosen_dir=dir_name)
+                    self.perception.create_debug_overlay(frame, unified_state, chosen_dir=dir_name)
                     last_overlay_time = now_t
 
                 # Update held keys if direction changed
@@ -416,11 +424,11 @@ class RunManager:
                     last_slot_cycle_time = now_t
 
                 # B. Emergency Z-Move ('f'): triggers 400px screen-wide burst when critically low HP or surrounded
-                if now_t - last_zmove_time >= 4.0 and vision_state:
-                    hp_r = vision_state.get("hp_ratio")
+                if now_t - last_zmove_time >= 4.0 and unified_state:
+                    hp_r = unified_state["player"].get("hp_ratio")
                     is_crit_hp = (hp_r is not None and hp_r < 0.40)
-                    is_heavy_encircled = vision_state.get("is_encircled", False)
-                    n_close_mobs = len([e for e in vision_state.get("enemies", []) if e.get("dist", 999.0) < 180.0])
+                    is_heavy_encircled = unified_state.get("is_encircled", False)
+                    n_close_mobs = len([e for e in unified_state.get("enemies", []) if e.get("dist", 999.0) < 180.0])
                     if is_crit_hp or is_heavy_encircled or n_close_mobs >= 8:
                         self.browser_ctrl.press_key("f")
                         last_zmove_time = now_t
@@ -460,6 +468,8 @@ class RunManager:
 
         # Economy & coin farming tracking
         coins_earned = dom_results.get("coins") if dom_results else None
+        if coins_earned is None and unified_state:
+            coins_earned = unified_state.get("metrics", {}).get("coins")
         self.coin_tracker.record_run(
             coins=coins_earned,
             kills=run_result.get("game_score"),

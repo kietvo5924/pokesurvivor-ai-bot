@@ -105,7 +105,11 @@ class MovementPolicy:
         sector_enemy_counts = vision_state.get("sector_enemy_counts", {})
         is_encircled = vision_state.get("is_encircled", False)
         hp_ratio = vision_state.get("hp_ratio")
+        if hp_ratio is None and isinstance(vision_state.get("player"), dict):
+            hp_ratio = vision_state["player"].get("hp_ratio")
         hp_status = vision_state.get("hp_status", "UNKNOWN")
+        if hp_status == "UNKNOWN" and isinstance(vision_state.get("player"), dict):
+            hp_status = vision_state["player"].get("source", "UNKNOWN")
         is_low_hp = (hp_ratio is not None and hp_ratio < 0.50)
         effective_danger_thresh = self.danger_threshold + (25.0 if is_low_hp else 0.0)
 
@@ -349,6 +353,8 @@ class MovementPolicy:
         # Never enter at early game (0-2 mins) when we need to farm EXP in open fields!
         # ------------------------------------------------------------------
         rift_target = vision_state.get("rift_target")
+        if not rift_target and isinstance(vision_state.get("specials"), dict):
+            rift_target = vision_state["specials"].get("rift")
         if rift_target and danger_level == "LOW" and min_enemy_dist > 190.0:
             target_type = rift_target.get("type", "arrow")
             can_enter_rift = (target_type == "portal" and elapsed_time > 120.0 and current_level >= 3) or (current_level >= 5 and elapsed_time > 180.0)

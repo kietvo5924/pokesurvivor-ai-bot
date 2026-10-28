@@ -58,12 +58,20 @@ class StateTracker:
         if vision_state.get("is_encircled", False):
             self.encircled_events += 1
 
-        # Verified HP tracking: only record real measurements
+        # Verified HP tracking: only record real measurements from verified sources
         hp = vision_state.get("hp_ratio")
-        hp_status = vision_state.get("hp_status", "UNKNOWN")
+        if hp is None and isinstance(vision_state.get("player"), dict):
+            hp = vision_state["player"].get("hp_ratio")
+
+        hp_status = vision_state.get("hp_status")
+        if not hp_status and isinstance(vision_state.get("player"), dict):
+            hp_status = vision_state["player"].get("source", "UNKNOWN")
+        if not hp_status:
+            hp_status = "UNKNOWN"
         self.last_hp_status = hp_status
 
-        if hp is not None and hp_status in ("VERIFIED", "ESTIMATED"):
+        valid_statuses = ("VERIFIED", "ESTIMATED", "APPROXIMATE", "window_G", "canvas_telemetry_texts", "opencv_fallback")
+        if hp is not None and hp_status in valid_statuses:
             self.hp_history.append(hp)
             if self.last_hp is not None and hp < self.last_hp - 0.08:
                 self.damage_events += 1

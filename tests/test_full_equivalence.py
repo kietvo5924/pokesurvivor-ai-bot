@@ -188,8 +188,13 @@ class TestFullEquivalence(unittest.TestCase):
             tracker2 = CoinTracker(filepath=temp_path)
             self.assertEqual(tracker2.data["total_coins"], 400)
         finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            for ext in ["", ".bak"]:
+                p = temp_path + ext
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
 
     # ------------------------------------------------------------------
     # 4. UpgradePolicy Equivalence Tests

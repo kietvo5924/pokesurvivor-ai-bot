@@ -21,6 +21,10 @@ from pokesurvivor.perception import PerceptionEngine
 # Injected hook executed at document_start in the browser context
 CANVAS_HOOK_SCRIPT = """
 (() => {
+  // Prevent double-installation
+  if (window.__psHookInstalled) return;
+  window.__psHookInstalled = true;
+
   // 1. One-shot setter hook for window.G on pokesurvivor.com / /dev.html
   // (Reference: PokeSurvivorTool sites/default/hook.js · MIT License)
   if (!window.G && !Object.getOwnPropertyDescriptor(Object.prototype, 'Game')) {
@@ -29,11 +33,13 @@ CANVAS_HOOK_SCRIPT = """
       get() { return undefined; },
       set(v) {
         Object.defineProperty(this, 'Game', { value: v, writable: true, enumerable: true, configurable: true });
-        if (this && this.BUILT === true && 'LIFT' in this) {
+        const target = (v && typeof v === 'object' && ('BUILT' in v || 'LIFT' in v || 'player' in v)) ? v :
+                       (this && typeof this === 'object' && ('BUILT' in this || 'LIFT' in this || 'player' in this)) ? this : null;
+        if (target) {
           if (Object.getOwnPropertyDescriptor(Object.prototype, 'Game')?.set === trap.set) {
             delete Object.prototype.Game;
           }
-          window.G = this;
+          window.G = target;
         }
       },
     };
@@ -46,9 +52,9 @@ CANVAS_HOOK_SCRIPT = """
   }
 
   // 2. Real-time telemetry buffer for canvas-based engines (Doofcraft / generic)
+  // Strictly hooks only CanvasRenderingContext2D.prototype.drawImage and fillText
   window.__psTelemetry = {
     sprites: [],
-    shapes: [],
     texts: [],
     camera: { s: 1.0, e: 0.0, f: 0.0 },
     lastFrameAt: performance.now(),
@@ -58,27 +64,25 @@ CANVAS_HOOK_SCRIPT = """
   const P = CanvasRenderingContext2D.prototype;
   const origDrawImage = P.drawImage;
   const origFillText = P.fillText;
-  const origFill = P.fill;
-  const origStroke = P.stroke;
 
-  // Intercept Canvas drawImage to capture sprites & transforms
+  // Intercept Canvas drawImage to capture camera transform & sprites
   P.drawImage = function(img, ...args) {
     try {
-      if (this.canvas && (this.canvas.classList.contains('ps-canvas') || this.canvas.id === 'game-canvas')) {
+      if (this.canvas && (this.canvas.classList?.contains('ps-canvas') || this.canvas.id === 'game-canvas' || this.canvas.tagName === 'CANVAS')) {
         const m = this.getTransform ? this.getTransform() : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
         window.__psTelemetry.camera = { s: m.a, e: m.e, f: m.f };
-        
-        const src = img.src || (img.tagName ? img.tagName : 'canvas');
-        const dw = args.length === 8 ? args[6] : args.length === 4 ? args[2] : (img.width || 0);
-        const dh = args.length === 8 ? args[7] : args.length === 4 ? args[3] : (img.height || 0);
+
+        const src = img ? (img.src || (img.tagName ? img.tagName : 'canvas')) : '';
+        const dw = args.length === 8 ? args[6] : args.length === 4 ? args[2] : (img ? (img.width || 0) : 0);
+        const dh = args.length === 8 ? args[7] : args.length === 4 ? args[3] : (img ? (img.height || 0) : 0);
         const dx = args.length >= 4 ? args[args.length === 8 ? 4 : 0] : 0;
         const dy = args.length >= 4 ? args[args.length === 8 ? 5 : 1] : 0;
         const cx = m.a * (dx + dw / 2) + m.e;
         const cy = m.d * (dy + dh / 2) + m.f;
 
-        if (window.__psTelemetry.sprites.length < 400) {
+        if (window.__psTelemetry.sprites.length < 150) {
           window.__psTelemetry.sprites.push({
-            src: src.slice(-60),
+            src: String(src).slice(-60),
             cx: cx,
             cy: cy,
             w: dw * m.a,
@@ -88,20 +92,20 @@ CANVAS_HOOK_SCRIPT = """
         window.__psTelemetry.lastFrameAt = performance.now();
       }
     } catch(e) {}
-    return origDrawImage.apply(this, [img, ...args]);
+    return origDrawImage.apply(this, arguments);
   };
 
   // Intercept fillText for live HUD information (HP, level, kills, coins, time)
   P.fillText = function(text, ...args) {
     try {
-      if (this.canvas && (this.canvas.classList.contains('ps-canvas') || this.canvas.id === 'game-canvas')) {
+      if (this.canvas && (this.canvas.classList?.contains('ps-canvas') || this.canvas.id === 'game-canvas' || this.canvas.tagName === 'CANVAS')) {
         const str = String(text).trim();
-        if (str && window.__psTelemetry.texts.length < 60) {
+        if (str && window.__psTelemetry.texts.length < 100) {
           window.__psTelemetry.texts.push(str);
         }
       }
     } catch(e) {}
-    return origFillText.apply(this, [text, ...args]);
+    return origFillText.apply(this, arguments);
   };
 })();
 """
@@ -139,6 +143,15 @@ class GameStateAdapter:
         # 5. Extract Entities (Enemies, Hazards, Items, Specials, Map)
         entities = self._extract_entities(browser_data, frame_img, is_moving, player)
 
+        hp_ratio = player.get("hp_ratio")
+        rift_target = entities.get("specials", {}).get("rift")
+
+        confidence = 0.98 if player.get("source") == "window_G" else (
+            0.90 if player.get("source") == "canvas_telemetry_texts" else (
+                0.80 if player.get("source") == "opencv_fallback" else 0.50
+            )
+        )
+
         unified_state = {
             "timestamp": now,
             "player": player,
@@ -149,9 +162,24 @@ class GameStateAdapter:
             "terrain": entities["terrain"],
             "ui": ui,
             "metrics": metrics,
-            "danger_level": entities["danger_level"],
-            "is_encircled": entities["is_encircled"],
-            "is_stuck": entities["is_stuck"],
+            "danger_level": entities.get("danger_level", "LOW"),
+            "is_encircled": entities.get("is_encircled", False),
+            "is_stuck": entities.get("is_stuck", False),
+            # Direct tactical shortcuts for MovementPolicy & TargetEvaluator
+            "hp_ratio": hp_ratio,
+            "rift_target": rift_target,
+            "items_on_ground": entities.get("items_on_ground", []),
+            "sector_dangers": entities.get("sector_dangers", {}),
+            "sector_enemy_counts": entities.get("sector_enemy_counts", {}),
+            "sector_obstacles": entities.get("terrain", {}).get("sector_obstacles", {}),
+            "sector_obs_costs": entities.get("terrain", {}).get("sector_obs_costs", {}),
+            "min_enemy_dist": entities.get("min_enemy_dist", 9999.0),
+            "nearest_enemy_sector": entities.get("nearest_enemy_sector"),
+            "swarm_center": entities.get("swarm_center"),
+            "gem_cluster_sector": entities.get("gem_cluster_sector"),
+            "best_gem_vector": entities.get("best_gem_vector"),
+            "boss_info": entities.get("boss_info", {}),
+            "confidence": confidence,
             "sources": {
                 "player": player.get("source"),
                 "metrics": metrics.get("source"),
@@ -178,10 +206,35 @@ class GameStateAdapter:
                 };
 
                 // 1. window.G state
-                if (window.G && window.G.Game && window.G.Game.player) {
+                const G = window.G;
+                let P = null;
+                let container = G;
+                if (G) {
+                    if (G.player) {
+                        P = G.player;
+                    } else if (G.Game && G.Game.player) {
+                        P = G.Game.player;
+                        container = G.Game;
+                    }
+                }
+                if (P) {
                     try {
-                        const P = window.G.Game.player;
-                        const G = window.G;
+                        const enemyMgr = G.EnemyMgr || (G.Game ? G.Game.EnemyMgr : null) || (container ? container.EnemyMgr : null);
+                        const hazardsMgr = G.Hazards || (G.Game ? G.Game.Hazards : null) || (container ? container.Hazards : null);
+                        const projMgr = G.Projectiles || (G.Game ? G.Game.Projectiles : null) || (container ? container.Projectiles : null);
+                        const pickupMgr = G.Pickups || (G.Game ? G.Game.Pickups : null) || (container ? container.Pickups : null);
+                        const riftMgr = G.Rift || (G.Game ? G.Game.Rift : null) || (container ? container.Rift : null);
+
+                        const getList = (mgr) => {
+                            if (!mgr) return [];
+                            if (typeof mgr.all === 'function') {
+                                try { return mgr.all(); } catch(e) { return []; }
+                            }
+                            if (Array.isArray(mgr.all)) return mgr.all;
+                            if (Array.isArray(mgr)) return mgr;
+                            return [];
+                        };
+
                         res.gState = {
                             player: {
                                 x: P.x,
@@ -195,22 +248,22 @@ class GameStateAdapter:
                                 moves: P.moves || [],
                                 stats: P.stats || []
                             },
-                            gameState: G.Game.state,
-                            enemies: (G.EnemyMgr ? G.EnemyMgr.all() : []).filter(e => !e.dead).slice(0, 30).map(e => ({
+                            gameState: (G.Game ? G.Game.state : G.state) || 'running',
+                            enemies: getList(enemyMgr).filter(e => !e.dead).slice(0, 30).map(e => ({
                                 x: e.x, y: e.y, r: e.r, dex: e.dex, hp: e.hp, maxHp: e.maxHp,
                                 atkType: e.atkType, behavior: e.behavior, shiny: !!e.shiny,
                                 boss: !!e.boss
                             })),
-                            hazards: (G.Hazards ? G.Hazards.all : []).slice(0, 20).map(z => ({
+                            hazards: getList(hazardsMgr).slice(0, 20).map(z => ({
                                 kind: z.kind, x: z.x, y: z.y, r: z.r, angle: z.angle, len: z.len, w: z.w
                             })),
-                            projectiles: (G.Projectiles ? G.Projectiles.all() : []).filter(p => p.friendly === false).slice(0, 20).map(p => ({
+                            projectiles: getList(projMgr).filter(p => p.friendly === false).slice(0, 20).map(p => ({
                                 x: p.x, y: p.y, r: p.r, vx: p.vx, vy: p.vy
                             })),
-                            pickups: (G.Pickups ? G.Pickups.all() : []).slice(0, 30).map(p => ({
+                            pickups: getList(pickupMgr).slice(0, 30).map(p => ({
                                 x: p.x, y: p.y, kind: p.kind
                             })),
-                            rift: (G.Rift && G.Rift.rift) ? { x: G.Rift.rift.x, y: G.Rift.rift.y, inArena: !!G.Rift.inArena } : null
+                            rift: (riftMgr && riftMgr.rift) ? { x: riftMgr.rift.x, y: riftMgr.rift.y, inArena: !!riftMgr.inArena } : null
                         };
                     } catch(e) {}
                 }
@@ -219,16 +272,17 @@ class GameStateAdapter:
                 if (window.__psTelemetry) {
                     try {
                         const tel = window.__psTelemetry;
+                        // Copy and atomically FLUSH active buffers so old texts/sprites never linger!
+                        const texts = tel.texts ? tel.texts.slice(0) : [];
+                        tel.texts = []; // Flush on read!
+                        const sprites = tel.sprites ? tel.sprites.slice(0) : [];
+                        tel.sprites = []; // Flush on read!
                         res.telemetry = {
-                            texts: tel.texts ? tel.texts.slice(-40) : [],
+                            texts: texts,
                             camera: tel.camera || { s: 1, e: 0, f: 0 },
-                            spriteCount: tel.sprites ? tel.sprites.length : 0,
+                            spriteCount: sprites.length,
                             lastFrameAt: tel.lastFrameAt || 0
                         };
-                        // Flush transient text buffer to prevent unbounded growth
-                        if (tel.texts && tel.texts.length > 50) {
-                            tel.texts.splice(0, tel.texts.length - 20);
-                        }
                     } catch(e) {}
                 }
 
@@ -363,9 +417,10 @@ class GameStateAdapter:
             return {}
 
     def _extract_player(self, browser_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Extracts player attributes, combining window.G, canvas texts, and OpenCV."""
+        """Extracts player attributes, combining window.G, canvas texts, and OpenCV fallback."""
         # 1. From window.G
-        g_player = browser_data.get("gState", {}).get("player")
+        g_state = browser_data.get("gState") or {}
+        g_player = g_state.get("player")
         if g_player:
             hp = g_player.get("hp", 100)
             max_hp = g_player.get("maxHp", 100)
@@ -384,12 +439,11 @@ class GameStateAdapter:
             }
 
         # 2. From Canvas telemetry texts (e.g. Doofcraft "182 / 182", "Tapu Fini", "Lv. 1")
-        telemetry = browser_data.get("telemetry", {})
-        texts = telemetry.get("texts", [])
+        telemetry = browser_data.get("telemetry") or {}
+        texts = telemetry.get("texts") or []
         hp_ratio = None
         current_hp = None
         max_hp = None
-        player_name = None
         level = None
 
         for t in texts:
@@ -399,7 +453,7 @@ class GameStateAdapter:
                 current_hp = int(hp_m.group(1))
                 max_hp = int(hp_m.group(2))
                 if max_hp > 0:
-                    hp_ratio = current_hp / max_hp
+                    hp_ratio = max(0.0, min(1.0, current_hp / max_hp))
 
             # Match Level "Lv. 1"
             lvl_m = re.match(r"^Lv\.?\s*(\d+)$", t, re.IGNORECASE)
@@ -407,11 +461,18 @@ class GameStateAdapter:
                 level = int(lvl_m.group(1))
 
         # 3. Fallback to OpenCV HP ratio if text is not found
-        source = "canvas_telemetry_texts" if hp_ratio is not None else "opencv_fallback"
-        if hp_ratio is None:
-            hp_ratio = self.perception.last_hp_result.get("hp_ratio", 1.0)
+        if hp_ratio is not None:
+            source = "canvas_telemetry_texts"
+        else:
+            last_hp = getattr(self.perception, "last_hp_result", {})
+            if last_hp.get("hp_ratio") is not None and last_hp.get("status") in ("VERIFIED", "APPROXIMATE"):
+                hp_ratio = float(last_hp["hp_ratio"])
+                source = "opencv_fallback"
+            else:
+                hp_ratio = None
+                source = "unobserved"
 
-        cam = telemetry.get("camera", {"s": 1.0, "e": 0.0, "f": 0.0})
+        cam = telemetry.get("camera") or {"s": 1.0, "e": 0.0, "f": 0.0}
         # Screen center = 640, 360 in 1280x720
         world_x = (640.0 - cam.get("e", 0.0)) / max(0.01, cam.get("s", 1.0))
         world_y = (360.0 - cam.get("f", 0.0)) / max(0.01, cam.get("s", 1.0))
@@ -431,7 +492,7 @@ class GameStateAdapter:
 
     def _extract_ui(self, browser_data: Dict[str, Any]) -> Dict[str, Any]:
         """Extracts UI phase and choice dialog status."""
-        dom = browser_data.get("dom", {})
+        dom = browser_data.get("dom") or {}
         return {
             "phase": dom.get("phase", "none"),
             "active_screen": dom.get("activeScreen", "unknown"),
@@ -444,7 +505,10 @@ class GameStateAdapter:
         }
 
     def _extract_metrics(self, browser_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Extracts genuine match results or HUD counters."""
+        """
+        Extracts genuine match results or HUD counters.
+        Returns None/null when fields are not observed; never fabricates numbers.
+        """
         results = browser_data.get("results")
         if results and results.get("available"):
             return {
@@ -460,11 +524,11 @@ class GameStateAdapter:
             }
 
         # Otherwise read live counters from Canvas telemetry texts
-        telemetry = browser_data.get("telemetry", {})
-        texts = telemetry.get("texts", [])
+        telemetry = browser_data.get("telemetry") or {}
+        texts = telemetry.get("texts") or []
         kills = None
         coins = None
-        time_str = ""
+        time_str = None
 
         for t in texts:
             # Match "SHADY FOREST · 0 DEFEATED · 0 COINS" or "0 DEFEATED"
@@ -478,6 +542,7 @@ class GameStateAdapter:
             if time_m:
                 time_str = time_m.group(1)
 
+        source = "canvas_hud_texts" if (kills is not None or coins is not None) else "unobserved"
         return {
             "kills": kills,
             "time_str": time_str,
@@ -487,7 +552,7 @@ class GameStateAdapter:
             "damage": None,
             "downs": None,
             "is_match_over": False,
-            "source": "canvas_hud_texts" if kills is not None else "unobserved"
+            "source": source
         }
 
     def _extract_entities(
@@ -497,19 +562,34 @@ class GameStateAdapter:
         is_moving: bool,
         player: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Harmonizes entities from window.G, canvas telemetry, and OpenCV."""
+        """Harmonizes entities and tactical metrics from window.G, canvas telemetry, and OpenCV."""
         g_state = browser_data.get("gState")
-        
+
         # Branch 1: Complete window.G available
         if g_state:
             enemies = []
             px, py = player["world_x"], player["world_y"]
+            sector_enemy_counts = {s: 0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]}
+            min_enemy_dist = 9999.0
+            nearest_enemy_sec = None
+            swarm_x, swarm_y, swarm_count = 0.0, 0.0, 0
+
             for e in g_state.get("enemies", []):
                 dx = e["x"] - px
                 dy = e["y"] - py
                 dist = math.hypot(dx, dy)
                 deg = math.degrees(math.atan2(dy, dx)) % 360
                 sector = self._angle_to_sector(deg)
+                if sector in sector_enemy_counts:
+                    sector_enemy_counts[sector] += 1
+                if dist < min_enemy_dist:
+                    min_enemy_dist = dist
+                    nearest_enemy_sec = sector
+                if dist < 340.0:
+                    swarm_x += e["x"]
+                    swarm_y += e["y"]
+                    swarm_count += 1
+
                 enemies.append({
                     "x": e["x"],
                     "y": e["y"],
@@ -517,12 +597,15 @@ class GameStateAdapter:
                     "sector": sector,
                     "radius": e.get("r", 16),
                     "type": e.get("dex"),
+                    "dex": e.get("dex"),
                     "is_boss": e.get("boss", False),
                     "is_shiny": e.get("shiny", False),
-                    "is_thief": e.get("behavior") == "thief",
+                    "is_thief": e.get("behavior") == "thief" or e.get("dex") in [1000, 52],
                     "hp": e.get("hp"),
                     "source": "window_G"
                 })
+
+            swarm_center = (swarm_x / swarm_count, swarm_y / swarm_count) if swarm_count > 0 else None
 
             hazards = []
             for z in g_state.get("hazards", []):
@@ -563,20 +646,43 @@ class GameStateAdapter:
                 "chest": None
             }
 
+            close_threats = [e for e in enemies if e["dist"] < 175.0]
+            is_encircled = len(close_threats) >= 7 and len({e["sector"] for e in close_threats}) >= 4
+
+            # Sector danger profiles from window.G
+            sector_dangers = {}
+            for s, cnt in sector_enemy_counts.items():
+                sector_dangers[s] = cnt * 80.0
+
+            danger_level = "CRITICAL" if (min_enemy_dist < 120.0 or is_encircled) else (
+                "HIGH" if (min_enemy_dist < 200.0 or len(hazards) > 0) else (
+                    "MEDIUM" if min_enemy_dist < 280.0 else "LOW"
+                )
+            )
+
             return {
                 "enemies": enemies,
                 "hazards": hazards,
                 "items": items,
+                "items_on_ground": items,
                 "specials": specials,
                 "terrain": {"sector_obstacles": {}, "sector_obs_costs": {}},
-                "danger_level": "HIGH" if len(hazards) > 0 else "LOW",
-                "is_encircled": len([e for e in enemies if e["dist"] < 150]) >= 6,
+                "sector_dangers": sector_dangers,
+                "sector_enemy_counts": sector_enemy_counts,
+                "min_enemy_dist": min_enemy_dist,
+                "nearest_enemy_sector": nearest_enemy_sec,
+                "swarm_center": swarm_center,
+                "gem_cluster_sector": None,
+                "best_gem_vector": None,
+                "boss_info": {},
+                "danger_level": danger_level,
+                "is_encircled": is_encircled,
                 "is_stuck": False,
                 "source": "window_G",
                 "hazard_source": "window_G"
             }
 
-        # Branch 2: OpenCV Visual Perception (Rock-Solid for Doofcraft & Generic Canvas)
+        # Branch 2: OpenCV Visual Perception (Doofcraft & Generic Canvas)
         if frame_img is not None:
             vision = self.perception.analyze_frame(frame_img, is_moving=is_moving)
             specials = {
@@ -585,15 +691,25 @@ class GameStateAdapter:
                 "altar": None,
                 "chest": None
             }
+            items = list(vision.get("gems", [])) + list(vision.get("items_on_ground", []))
             return {
                 "enemies": vision.get("enemies", []),
                 "hazards": vision.get("hazards", []),
-                "items": vision.get("gems", []),
+                "items": items,
+                "items_on_ground": vision.get("items_on_ground", []),
                 "specials": specials,
                 "terrain": {
                     "sector_obstacles": vision.get("sector_obstacles", {}),
                     "sector_obs_costs": vision.get("sector_obs_costs", {})
                 },
+                "sector_dangers": vision.get("sector_dangers", {}),
+                "sector_enemy_counts": vision.get("sector_enemy_counts", {}),
+                "min_enemy_dist": vision.get("min_enemy_dist", 9999.0),
+                "nearest_enemy_sector": vision.get("nearest_enemy_sector"),
+                "swarm_center": vision.get("swarm_center"),
+                "gem_cluster_sector": vision.get("gem_cluster_sector"),
+                "best_gem_vector": vision.get("best_gem_vector"),
+                "boss_info": vision.get("boss_info", {}),
                 "danger_level": vision.get("danger_level", "LOW"),
                 "is_encircled": vision.get("is_encircled", False),
                 "is_stuck": vision.get("is_stuck", False),
@@ -606,8 +722,17 @@ class GameStateAdapter:
             "enemies": [],
             "hazards": [],
             "items": [],
-            "specials": {},
+            "items_on_ground": [],
+            "specials": {"rift": None, "spring": None, "altar": None, "chest": None},
             "terrain": {"sector_obstacles": {}, "sector_obs_costs": {}},
+            "sector_dangers": {},
+            "sector_enemy_counts": {s: 0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]},
+            "min_enemy_dist": 9999.0,
+            "nearest_enemy_sector": None,
+            "swarm_center": None,
+            "gem_cluster_sector": None,
+            "best_gem_vector": None,
+            "boss_info": {},
             "danger_level": "LOW",
             "is_encircled": False,
             "is_stuck": False,
@@ -620,4 +745,3 @@ class GameStateAdapter:
         sectors = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
         idx = int((angle_deg + 22.5) // 45) % 8
         return sectors[idx]
-
