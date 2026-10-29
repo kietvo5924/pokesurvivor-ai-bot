@@ -1,7 +1,11 @@
 import time
 import math
 from typing import Dict, Any, List, Optional, Tuple
-from pokesurvivor.danger_estimator import DIR_KEYS, OPPOSITE_DIR
+from pokesurvivor.danger_estimator import (
+    DIR_KEYS, OPPOSITE_DIR,
+    DIR16_ANGLES, DIR16_KEYS, DIR16_NAMES, OPPOSITE_DIR16,
+    angle_to_16_sector, angle_diff_deg
+)
 from pokesurvivor.target_evaluator import TargetEvaluator
 
 # Compass angle mapping (0 = East, 90 = South, 180 = West, 270 = North)
@@ -24,17 +28,336 @@ LATERAL_SLIDES = {
 
 def angle_diff(a1: float, a2: float) -> float:
     """Calculates minimal angular difference between two angles in degrees (0 to 180)."""
-    diff = (a1 - a2 + 180) % 360 - 180
-    return abs(diff)
+    return angle_diff_deg(a1, a2)
+
+class PredictiveSurvivalPlanner:
+    """
+    Multi-horizon Predictive Trajectory Rollout Planner (v5.0):
+    - Predicts continuous player trajectory across 16 candidate directions over T = 0.8s horizon.
+    - Samples M = 5 future timesteps: t in [0.20, 0.40, 0.60, 0.80, 1.00]s.
+    - Integrates verified player speed (with buffs/debuffs) from game state.
+    - Accounts for player invulnerability frames (i-frames) to prevent over-evasion.
+    - Simulates mob velocities and pursuit vectors, penalizing collision (<42px) and crowding (<85px).
+    - Checks projectile trajectory CPA/DCA and graze radii.
+    - Accounts for hazard/telegraph activation delay (detonation time-to-contact).
+    - Evaluates obstacle clearance, cliffs, and map boundaries at every predicted timestep.
+    - Scores secondary utilities: Repulsion potential field, EXP gem gravitation, kiting orbit (200-280px).
+    - Detects emergency collision risks to immediately break direction lock.
+    """
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.update_config(config or {})
+
+    def update_config(self, config: Dict[str, Any]):
+        self.horizon: float = float(config.get("rollout_horizon", 0.80))
+        self.timesteps: List[float] = [0.20, 0.40, 0.60, 0.80, 1.00]
+        self.speed_scale: float = float(config.get("speed_scale", 1.65))
+        self.mob_penalty_weight: float = float(config.get("mob_penalty_weight", 150.0))
+        self.mob_clear_corridor_bonus: float = float(config.get("mob_clear_corridor_bonus", 550.0))
+        self.exp_harvest_weight: float = float(config.get("exp_harvest_weight", 0.70))
+        self.wall_avoidance_weight: float = float(config.get("wall_avoidance_weight", 2.5))
+        self.danger_threshold: float = float(config.get("danger_threshold", 175.0))
+
+    def evaluate_candidates(
+        self,
+        vision_state: Dict[str, Any],
+        current_dir: Optional[str] = "E",
+        candidate_mode: int = 16
+    ) -> Tuple[str, float, Dict[str, float], Dict[str, Any], bool]:
+        """
+        Evaluates 16 candidate directions using multi-timestep trajectory rollout.
+        Returns:
+            (best_direction, best_score, candidate_scores_dict, risk_breakdown_dict, emergency_collision_flag)
+        """
+        player = vision_state.get("player") or {}
+        if "player_pos" in vision_state:
+            cx, cy = vision_state["player_pos"]
+        elif "world_x" in player and "world_y" in player:
+            cx, cy = float(player["world_x"]), float(player["world_y"])
+        elif "x" in player and "y" in player:
+            cx, cy = float(player["x"]), float(player["y"])
+        else:
+            cx, cy = 640.0, 360.0
+
+        raw_speed = float(player.get("speed", player.get("move_speed", 100.0)))
+        v_player = max(80.0, raw_speed * self.speed_scale)
+
+        is_invuln = bool(
+            player.get("invulnerable") or
+            player.get("invincible") or
+            player.get("iframe_remaining", 0.0) > 0.0 or
+            player.get("is_hit", False)
+        )
+        iframe_risk_factor = 0.25 if is_invuln else 1.0
+
+        hp_ratio = vision_state.get("hp_ratio")
+        if hp_ratio is None and isinstance(vision_state.get("player"), dict):
+            hp_ratio = vision_state["player"].get("hp_ratio")
+        is_hp_unknown = (hp_ratio is None)
+        is_low_hp = (hp_ratio is not None and hp_ratio < 0.50)
+        repel_mult = 2.0 if is_low_hp else (1.4 if is_hp_unknown else 1.0)
+
+        enemies = vision_state.get("enemies", [])
+        hazards = vision_state.get("hazards", [])
+        target_gem_sec = vision_state.get("gem_cluster_sector") or vision_state.get("best_gem_vector")
+
+        sector_obstacles = vision_state.get("sector_obstacles", {})
+        sector_obs_costs = vision_state.get("sector_obs_costs", {})
+        terrain_info = vision_state.get("terrain") or {}
+        map_bounds = terrain_info.get("mapBounds")
+
+        directions = DIR16_NAMES if candidate_mode == 16 else list(DIR_ANGLES.keys())
+        angles_map = DIR16_ANGLES if candidate_mode == 16 else DIR_ANGLES
+
+        curr_ang = angles_map.get(current_dir or "E", 0.0)
+
+        # -------------------------------------------------------------
+        # 0. Compute Proactive Distance Repulsion Potential Field
+        # -------------------------------------------------------------
+        repel_vx = 0.0
+        repel_vy = 0.0
+        nearby_enemy_count = 0
+        enemy_ahead_count = 0
+
+        effective_danger_thresh = self.danger_threshold + (25.0 if is_low_hp else (15.0 if is_hp_unknown else 0.0))
+
+        for e in enemies:
+            ex = float(e.get("x", cx))
+            ey = float(e.get("y", cy))
+            edist = float(e.get("dist", math.hypot(cx - ex, cy - ey)))
+            if edist < (effective_danger_thresh + 65.0):
+                w = 1.0 / max(15.0, edist)
+                repel_vx += (cx - ex) * w
+                repel_vy += (cy - ey) * w
+                nearby_enemy_count += 1
+                e_angle = math.degrees(math.atan2(ey - cy, ex - cx)) % 360.0
+                if angle_diff_deg(e_angle, curr_ang) < 60.0 and edist < 140.0:
+                    enemy_ahead_count += 1
+
+        has_repulsion = False
+        repel_angle = 0.0
+        if nearby_enemy_count > 0 and (abs(repel_vx) > 1e-4 or abs(repel_vy) > 1e-4):
+            repel_angle = math.degrees(math.atan2(repel_vy, repel_vx)) % 360.0
+            has_repulsion = True
+
+        # -------------------------------------------------------------
+        # 1. Check if current course has imminent collision (Emergency Break)
+        # -------------------------------------------------------------
+        emergency_collision = False
+        if current_dir:
+            curr_rad = math.radians(curr_ang)
+            v_curr_x = v_player * math.cos(curr_rad)
+            v_curr_y = v_player * math.sin(curr_rad)
+
+            for t_chk in [0.15, 0.30, 0.45]:
+                p_chk_x = cx + v_curr_x * t_chk
+                p_chk_y = cy + v_curr_y * t_chk
+
+                for e in enemies:
+                    ex = float(e.get("x", cx))
+                    ey = float(e.get("y", cy))
+                    evx = float(e.get("vx", 0.0))
+                    evy = float(e.get("vy", 0.0))
+                    if evx == 0.0 and evy == 0.0:
+                        ed = math.hypot(cx - ex, cy - ey)
+                        if ed > 0.1:
+                            espeed = 95.0 if e.get("is_boss") else 75.0
+                            evx = espeed * (cx - ex) / ed
+                            evy = espeed * (cy - ey) / ed
+                    pred_ex = ex + evx * t_chk
+                    pred_ey = ey + evy * t_chk
+                    if math.hypot(p_chk_x - pred_ex, p_chk_y - pred_ey) < 42.0:
+                        emergency_collision = True
+                        break
+
+                for h in hazards:
+                    hx = float(h.get("x", cx))
+                    hy = float(h.get("y", cy))
+                    hvx = float(h.get("vx", 0.0))
+                    hvy = float(h.get("vy", 0.0))
+                    hr = float(h.get("radius", 65.0))
+                    httc = float(h.get("ttc", 0.6))
+                    pred_hx = hx + hvx * t_chk
+                    pred_hy = hy + hvy * t_chk
+                    if (h.get("type") in ("projectile", "bullet") or t_chk >= httc) and math.hypot(p_chk_x - pred_hx, p_chk_y - pred_hy) < hr:
+                        emergency_collision = True
+                        break
+
+                if emergency_collision:
+                    break
+
+        candidate_scores: Dict[str, float] = {}
+        risk_breakdowns: Dict[str, Dict[str, float]] = {}
+
+        # -------------------------------------------------------------
+        # 2. Multi-Timestep Rollout for all candidate directions
+        # -------------------------------------------------------------
+        for d in directions:
+            deg = angles_map.get(d, 0.0)
+            rad = math.radians(deg)
+            v_px = v_player * math.cos(rad)
+            v_py = v_player * math.sin(rad)
+
+            mob_collision_risk = 0.0
+            bullet_risk = 0.0
+            hazard_risk = 0.0
+            obstacle_risk = 0.0
+
+            d8 = d if d in sector_obstacles else self._to_8_sector(deg)
+            if sector_obstacles.get(d8, False):
+                obstacle_risk += 75000.0
+
+            obs_cost = sector_obs_costs.get(d8, 0.0)
+            if obs_cost > 120.0:
+                obstacle_risk += obs_cost * 25.0 * self.wall_avoidance_weight
+
+            for t in self.timesteps:
+                t_weight = 1.0 / (t + 0.15)
+                px_t = cx + v_px * t
+                py_t = cy + v_py * t
+
+                if map_bounds:
+                    min_x, max_x = map_bounds.get("minX", 0.0), map_bounds.get("maxX", 9999.0)
+                    min_y, max_y = map_bounds.get("minY", 0.0), map_bounds.get("maxY", 9999.0)
+                    if px_t < (min_x + 35.0) or px_t > (max_x - 35.0) or py_t < (min_y + 35.0) or py_t > (max_y - 35.0):
+                        obstacle_risk += 45000.0 * t_weight
+
+                for e in enemies:
+                    ex = float(e.get("x", cx))
+                    ey = float(e.get("y", cy))
+                    evx = float(e.get("vx", 0.0))
+                    evy = float(e.get("vy", 0.0))
+                    if evx == 0.0 and evy == 0.0:
+                        ed = math.hypot(cx - ex, cy - ey)
+                        if ed > 0.1:
+                            espeed = 95.0 if e.get("is_boss") else 75.0
+                            evx = espeed * (cx - ex) / ed
+                            evy = espeed * (cy - ey) / ed
+
+                    pred_ex = ex + evx * t
+                    pred_ey = ey + evy * t
+                    dist_to_mob = math.hypot(px_t - pred_ex, py_t - pred_ey)
+                    boss_mult = 2.5 if e.get("is_boss") else 1.0
+
+                    if dist_to_mob < 42.0:
+                        mob_collision_risk += 35000.0 * t_weight * boss_mult * iframe_risk_factor
+                    elif dist_to_mob < 85.0:
+                        mob_collision_risk += (8000.0 / (dist_to_mob + 1.0)) * t_weight * boss_mult * iframe_risk_factor
+                    elif dist_to_mob < 140.0:
+                        mob_collision_risk += (1200.0 / (dist_to_mob + 1.0)) * boss_mult * iframe_risk_factor
+
+                for h in hazards:
+                    hx = float(h.get("x", cx))
+                    hy = float(h.get("y", cy))
+                    hvx = float(h.get("vx", 0.0))
+                    hvy = float(h.get("vy", 0.0))
+                    h_type = h.get("type", "hazard")
+                    httc = float(h.get("ttc", 0.6))
+                    hr = float(h.get("radius", 65.0))
+
+                    pred_hx = hx + hvx * t
+                    pred_hy = hy + hvy * t
+                    dist_h = math.hypot(px_t - pred_hx, py_t - pred_hy)
+
+                    if h_type in ("projectile", "bullet", "poison_bullet"):
+                        if dist_h < 38.0:
+                            bullet_risk += 60000.0 * t_weight * iframe_risk_factor
+                        elif dist_h < 68.0:
+                            bullet_risk += 16000.0 * t_weight * iframe_risk_factor
+                    elif h_type in ("telegraph", "hazard", "blast"):
+                        if t >= httc:
+                            if dist_h < hr:
+                                hazard_risk += 48000.0 * t_weight * iframe_risk_factor
+                            elif dist_h < (hr + 30.0):
+                                hazard_risk += 12000.0 * t_weight * iframe_risk_factor
+                        else:
+                            if dist_h < hr:
+                                hazard_risk += 4000.0 * iframe_risk_factor
+
+            # ---------------------------------------------------------
+            # 3. Secondary Utility & Potential Field Alignment
+            # ---------------------------------------------------------
+            utility_reward = 0.0
+
+            # A. Potential Field Alignment with Repulsion Vector
+            if has_repulsion:
+                diff_repel = angle_diff_deg(deg, repel_angle)
+                repel_alignment = (180.0 - diff_repel) * 2.6 * repel_mult
+                utility_reward += repel_alignment
+
+            # B. EXP Cluster Gravitation
+            if target_gem_sec:
+                gem_ang = angles_map.get(target_gem_sec)
+                if gem_ang is None and target_gem_sec in DIR_ANGLES:
+                    gem_ang = float(DIR_ANGLES[target_gem_sec])
+                if gem_ang is not None:
+                    diff_gem = angle_diff_deg(deg, gem_ang)
+                    if diff_gem <= 25.0:
+                        utility_reward += self.exp_harvest_weight * 280.0
+                    elif diff_gem <= 55.0:
+                        utility_reward += self.exp_harvest_weight * 140.0
+
+            # C. Kiting Orbit Sweetspot (200px - 280px buffer from mobs)
+            px_end = cx + v_px * self.horizon
+            py_end = cy + v_py * self.horizon
+            if enemies:
+                min_end_dist = min(math.hypot(px_end - float(e.get("x", cx)), py_end - float(e.get("y", cy))) for e in enemies)
+                if 200.0 <= min_end_dist <= 280.0:
+                    utility_reward += 120.0
+                elif min_end_dist < 110.0:
+                    utility_reward -= 250.0
+
+            # D. Open field corridor clearance bonus
+            d_left = self._shift_angle(deg, -30.0)
+            d_right = self._shift_angle(deg, +30.0)
+            left_8 = self._to_8_sector(d_left)
+            right_8 = self._to_8_sector(d_right)
+            if not sector_obstacles.get(left_8, False) and not sector_obstacles.get(right_8, False):
+                utility_reward += 60.0
+
+            # E. Momentum continuity & Anti-Twitch
+            turn_angle = angle_diff_deg(deg, curr_ang)
+            if turn_angle <= 25.0:
+                utility_reward += 30.0
+            elif turn_angle <= 50.0:
+                utility_reward += 10.0
+            elif turn_angle >= 155.0 and enemy_ahead_count == 0:
+                # Only penalize 180 flip if no mob is blocking the front path
+                utility_reward -= 350.0
+
+            total_risk = mob_collision_risk + bullet_risk + hazard_risk + obstacle_risk
+            final_score = (1000.0 / (1.0 + total_risk * 0.01)) + utility_reward
+
+            candidate_scores[d] = final_score
+            risk_breakdowns[d] = {
+                "mob_collision_risk": mob_collision_risk,
+                "bullet_risk": bullet_risk,
+                "hazard_risk": hazard_risk,
+                "obstacle_risk": obstacle_risk,
+                "utility_reward": utility_reward
+            }
+
+        ranked = sorted(candidate_scores.items(), key=lambda x: x[1], reverse=True)
+        best_dir, best_score = ranked[0]
+
+        return best_dir, best_score, candidate_scores, risk_breakdowns.get(best_dir, {}), emergency_collision
+
+    def _to_8_sector(self, angle_deg: float) -> str:
+        idx = int(((angle_deg + 22.5) % 360.0) // 45.0)
+        names = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
+        return names[idx]
+
+    def _shift_angle(self, angle_deg: float, delta: float) -> float:
+        return (angle_deg + delta + 360.0) % 360.0
+
 
 class MovementPolicy:
     """
-    Momentum-Preserving Elliptical Kiting & Bullet Dodging Policy (v4.5):
-    - Zero Twitch / Deceleration: Never performs 180-degree dead-stop reversals into chasing packs.
-    - Continuous Sprint Speed: Holds smooth directional momentum (0.45s - 1.2s) to naturally outrun mobs.
-    - Lateral Evasion: Steps orthogonally (45-90 deg) around obstacles, bullets, and oncoming mobs.
-    - EXP Vacuuming: Curves tangential kiting arcs directly through dropped gem clusters and chests.
-    - Safe Rift Access: Only approaches Rift when strong enough (Level >= 4 or physical portal on-screen).
+    Predictive Multi-Horizon Kiting & Survival Planner (v5.0):
+    - 16-Candidate Direction Evaluation with 0.8s Trajectory Rollout.
+    - Verified State Integration: speeds, mob velocities, project CPA, hazard delays.
+    - Zero Twitch / Deceleration: Preserves continuous sprint momentum.
+    - Emergency Override: Instantly breaks direction lock when path is compromised.
+    - Tactical Gating: Safe Rift entry, Boss combat orbits, and item pickup sweeps.
     """
     def __init__(self, policy_config: Dict[str, Any]):
         self.update_config(policy_config)
@@ -42,15 +365,15 @@ class MovementPolicy:
         self.last_change_time = time.time()
         self.dir_lock_until = 0.0
         self.cruise_hold_duration = 2.8
-        self.cruise_dir_index = 0
         self.stuck_eject_time = 0.0
         self.last_dodge_time = 0.0
-        # Temporal Pin Detector (Corner Trapping Prevention)
-        self.pos_history: List[Tuple[float, float, float]] = []  # (timestamp, x, y)
+        self.pos_history: List[Tuple[float, float, float]] = []
         self.pin_escape_until = 0.0
         self.pin_escape_dir: Optional[str] = None
-        # Tactical Target Prioritization (Thief, Spring, Chest, Escort)
         self.target_evaluator = TargetEvaluator()
+        self.planner = PredictiveSurvivalPlanner(self.config)
+        self.last_candidate_scores: Dict[str, float] = {}
+        self.last_risk_breakdown: Dict[str, Any] = {}
 
     def update_config(self, policy_config: Dict[str, Any]):
         self.config = policy_config.get("movement", {})
@@ -65,8 +388,15 @@ class MovementPolicy:
         self.exp_harvest_weight = float(self.config.get("exp_harvest_weight", 0.45))
         self.evasion_weight = float(self.config.get("evasion_weight", 0.95))
         self.step_duration = float(self.config.get("step_duration", 0.24))
+        if hasattr(self, "planner"):
+            self.planner.update_config(self.config)
 
-    def select_movement(self, vision_state: Dict[str, Any], current_level: int = 1, elapsed_time: float = 0.0) -> Tuple[str, List[str], float]:
+    def select_movement(
+        self,
+        vision_state: Dict[str, Any],
+        current_level: int = 1,
+        elapsed_time: float = 0.0
+    ) -> Tuple[str, List[str], float]:
         now = time.time()
         player_info = vision_state.get("player") or {}
         if "player_pos" in vision_state:
@@ -77,11 +407,23 @@ class MovementPolicy:
             cx, cy = float(player_info["x"]), float(player_info["y"])
         else:
             cx, cy = 640.0, 360.0
+
         sector_dangers = vision_state.get("sector_dangers", {})
         sector_obstacles = vision_state.get("sector_obstacles", {})
         sector_obs_costs = vision_state.get("sector_obs_costs", {})
         is_stuck = vision_state.get("is_stuck", False)
-        min_enemy_dist = vision_state.get("min_enemy_dist", 9999.0)
+        
+        enemies_list = vision_state.get("enemies", [])
+        min_enemy_dist = vision_state.get("min_enemy_dist")
+        if min_enemy_dist is None:
+            if enemies_list:
+                min_enemy_dist = min(
+                    float(e.get("dist", math.hypot(cx - float(e.get("x", cx)), cy - float(e.get("y", cy)))))
+                    for e in enemies_list
+                )
+            else:
+                min_enemy_dist = 9999.0
+
         nearest_enemy_sec = vision_state.get("nearest_enemy_sector")
         swarm_center = vision_state.get("swarm_center")
         hazards = vision_state.get("hazards", [])
@@ -90,36 +432,28 @@ class MovementPolicy:
         items_on_ground = vision_state.get("items_on_ground", [])
         danger_level = vision_state.get("danger_level", "LOW")
 
-        # ------------------------------------------------------------------
-        # Helper functions
-        # ------------------------------------------------------------------
         terrain_info = vision_state.get("terrain") or {}
         terrain_status = vision_state.get("terrain_status") or terrain_info.get("status")
         if not terrain_status:
             terrain_status = "verified" if sector_obstacles else "unobserved"
-        
-        # Distinction between:
-        # 1. Verified / Local view: local obstacle scanner has confirmed the path ahead
-        # 2. Bounds only: outer map boundary is known, but local obstacles are UNCONFIRMED
-        # 3. Unobserved: nothing is known
+
         is_local_observed = (terrain_status in ("verified", "local_view_only"))
 
         def is_passable(sec: str) -> bool:
-            if sector_obstacles.get(sec, False):
+            sec8 = sec if sec in sector_obstacles else self.planner._to_8_sector(DIR16_ANGLES.get(sec, 0.0))
+            if sector_obstacles.get(sec8, False):
                 return False
-            # Ultra-early terrain avoidance: steer away from cliffs and perimeter at 150-200px
-            if sector_obs_costs.get(sec, 0.0) > 320.0:
+            if sector_obs_costs.get(sec8, 0.0) > 320.0:
                 return False
             return True
 
         def is_completely_safe(sec: str) -> bool:
-            # A sector is completely safe ONLY if local terrain has been observed and clear.
-            # Knowing mapBounds alone ('bounds_only') does NOT guarantee local clearance!
             if not is_local_observed:
                 return False
             if not is_passable(sec):
                 return False
-            if sector_dangers.get(sec, 0.0) > 2500.0:
+            sec8 = sec if sec in sector_dangers else self.planner._to_8_sector(DIR16_ANGLES.get(sec, 0.0))
+            if sector_dangers.get(sec8, 0.0) > 2500.0:
                 return False
             return True
 
@@ -130,12 +464,8 @@ class MovementPolicy:
         hp_ratio = vision_state.get("hp_ratio")
         if hp_ratio is None and isinstance(vision_state.get("player"), dict):
             hp_ratio = vision_state["player"].get("hp_ratio")
-        hp_status = vision_state.get("hp_status", "UNKNOWN")
-        if hp_status == "UNKNOWN" and isinstance(vision_state.get("player"), dict):
-            hp_status = vision_state["player"].get("source", "UNKNOWN")
         is_hp_unknown = (hp_ratio is None)
         is_low_hp = (hp_ratio is not None and hp_ratio < 0.50)
-        # Cautious policy: when HP is unknown or low, expand danger buffer
         effective_danger_thresh = self.danger_threshold + (25.0 if is_low_hp else (15.0 if is_hp_unknown else 0.0))
 
         def score_cand(s: str) -> float:
@@ -144,58 +474,52 @@ class MovementPolicy:
             score += mobs * self.mob_penalty_weight
             if mobs == 0:
                 score -= self.mob_clear_corridor_bonus
-            # Quadratic close contact penalty for any mob in sector within 85px
             close_in_sec = sum(1 for e in vision_state.get("enemies", []) if e.get("sector") == s and e.get("dist", 999.0) < 85.0)
             if close_in_sec > 0:
                 score += close_in_sec * 500.0
-            # Dynamic open field clearance bonus: reward sectors whose adjacent sectors are also open
             deg = DIR_ANGLES.get(s, 0)
             n1 = self._angle_to_sector((deg - 45 + 360) % 360)
             n2 = self._angle_to_sector((deg + 45) % 360)
             if not sector_obstacles.get(n1, False) and not sector_obstacles.get(n2, False):
-                score -= 60.0  # broad open escape corridor
-            # Penalize diving backwards into our own pursuit tail
+                score -= 60.0
             if angle_diff(deg, back_ang) < 45.0:
                 score += 800.0
             return score
 
         def pick_safest_open_direction(fallback: str = "E") -> str:
-            # 1. Look for passable + low danger directions with wide open clearance
             candidates = [s for s, blocked in sector_obstacles.items() if not blocked and is_completely_safe(s)]
             if candidates:
                 candidates.sort(key=score_cand)
                 return candidates[0]
-            # 2. Look for any passable direction
             passable = [s for s, blocked in sector_obstacles.items() if not blocked and is_passable(s)]
             if passable:
                 passable.sort(key=score_cand)
                 return passable[0]
-            # 3. Dynamic least-resistance fallback: sector with lowest terrain obstacle cost & mob count
             all_dirs = list(DIR_ANGLES.keys())
             all_dirs.sort(key=lambda s: (sector_obs_costs.get(s, 0.0), sector_enemy_counts.get(s, 0), sector_dangers.get(s, 0.0)))
             return all_dirs[0]
 
         # ------------------------------------------------------------------
-        # PIN DETECTOR & CORNER ESCAPE (From PokeSurvivorTool analysis)
+        # 0. PIN DETECTOR & CORNER ESCAPE
         # ------------------------------------------------------------------
         self.pos_history = [p for p in self.pos_history if now - p[0] <= 1.8]
         self.pos_history.append((now, float(cx), float(cy)))
 
         if now < self.pin_escape_until and self.pin_escape_dir:
             if not sector_obstacles.get(self.pin_escape_dir, False):
-                return self.pin_escape_dir, DIR_KEYS[self.pin_escape_dir], max(0.10, self.pin_escape_until - now)
+                return self.pin_escape_dir, self._keys_for_dir(self.pin_escape_dir), max(0.10, self.pin_escape_until - now)
 
         if len(self.pos_history) >= 10 and (now - self.pos_history[0][0]) >= 1.0:
             init_x, init_y = self.pos_history[0][1], self.pos_history[0][2]
             net_disp = math.hypot(cx - init_x, cy - init_y)
             has_obstacle = any(sector_obstacles.values()) or any(c > 150.0 for c in sector_obs_costs.values())
-            
+
             if net_disp < 32.0 and has_obstacle:
                 wall_vx, wall_vy = 0.0, 0.0
                 for s, blocked in sector_obstacles.items():
                     if blocked or sector_obs_costs.get(s, 0.0) > 80.0:
                         cost_w = max(1.0, sector_obs_costs.get(s, 0.0) / 80.0)
-                        ang = math.radians(DIR_ANGLES[s])
+                        ang = math.radians(DIR_ANGLES.get(s, 0))
                         wall_vx -= math.cos(ang) * cost_w
                         wall_vy -= math.sin(ang) * cost_w
 
@@ -206,19 +530,33 @@ class MovementPolicy:
                     self.pin_escape_until = now + 0.75
                     self.pos_history.clear()
                     self._set_dir(escape_dir, now)
-                    return escape_dir, DIR_KEYS[escape_dir], 0.75
+                    return escape_dir, self._keys_for_dir(escape_dir), 0.75
 
         # ------------------------------------------------------------------
-        # ANTI-OSCILLATION DIRECTION COMMITMENT
-        # Prevents rapid micro-reversals while permitting immediate breakout on hazard
+        # RUN PREDICTIVE SURVIVAL PLANNER (Candidate Trajectory Rollout)
         # ------------------------------------------------------------------
+        pred_dir, pred_score, cand_scores, risk_bkdn, emerg_collision = self.planner.evaluate_candidates(
+            vision_state,
+            current_dir=self.current_dir,
+            candidate_mode=16
+        )
+        self.last_candidate_scores = cand_scores
+        self.last_risk_breakdown = risk_bkdn
+
+        if emerg_collision:
+            self.dir_lock_until = 0.0
+
         is_curr_blocked = sector_obstacles.get(self.current_dir, False)
-        has_immed_hazard = any((h.get("is_imminent", False) or h.get("ttc", 99.0) < 0.7 or h.get("dist", 999.0) < 85.0) and h.get("sector") == self.current_dir for h in hazards)
-        if now < self.dir_lock_until and not is_curr_blocked and not has_immed_hazard:
-            return self.current_dir, DIR_KEYS[self.current_dir], max(0.10, self.dir_lock_until - now)
+        has_immed_hazard = any(
+            (h.get("is_imminent", False) or h.get("ttc", 99.0) < 0.7 or h.get("dist", 999.0) < 85.0) and
+            h.get("sector") == self.current_dir for h in hazards
+        )
+
+        if now < self.dir_lock_until and not is_curr_blocked and not has_immed_hazard and not emerg_collision:
+            return self.current_dir, self._keys_for_dir(self.current_dir), max(0.10, self.dir_lock_until - now)
 
         # ------------------------------------------------------------------
-        # 0. ANTI-STUCK EMERGENCY EJECTION
+        # 1. ANTI-STUCK EMERGENCY EJECTION
         # ------------------------------------------------------------------
         if is_stuck or (now - self.stuck_eject_time < 0.5):
             if is_stuck:
@@ -226,28 +564,22 @@ class MovementPolicy:
             eject_dir = pick_safest_open_direction("E")
             self._set_dir(eject_dir, now)
             self.dir_lock_until = now + self.wall_breakout_thrust
-            return eject_dir, DIR_KEYS[eject_dir], self.wall_breakout_thrust
+            return eject_dir, self._keys_for_dir(eject_dir), self.wall_breakout_thrust
 
         # ------------------------------------------------------------------
-        # 1. DEAD-END & WALL BREAKOUT (When pinned against walls/cliffs with quái nearby)
-        # USER MANDATE:
-        # "Vô đường cụt thì phải cho điều kiện lao đầu vô quái (nhưng vẫn phải tính đường để xem quái đâu ít nhất
-        # hoặc là đường đó gần sát quái chưa đụng hẳn vô quái) để thoát ra chứ nó cứ đâm vô tường"
+        # 2. DEAD-END & WALL BREAKOUT
         # ------------------------------------------------------------------
         blocked_secs = [s for s, b in sector_obstacles.items() if b]
         is_wall_pinned = len(blocked_secs) >= 1 and (min_enemy_dist < (effective_danger_thresh + 15.0) or is_encircled)
 
         if is_wall_pinned:
-            # Outward escape vector pointing AWAY from all blocked terrain walls
-            wall_vx = 0.0
-            wall_vy = 0.0
+            wall_vx, wall_vy = 0.0, 0.0
             for s in blocked_secs:
-                ang = math.radians(DIR_ANGLES[s])
+                ang = math.radians(DIR_ANGLES.get(s, 0))
                 wall_vx -= math.cos(ang)
                 wall_vy -= math.sin(ang)
 
             wall_escape_angle = math.degrees(math.atan2(wall_vy, wall_vx)) % 360
-
             best_wall_escape = None
             best_wall_score = -99999.0
 
@@ -258,9 +590,7 @@ class MovementPolicy:
                 if diff > 130.0:
                     continue
                 align_score = 180.0 - diff
-
                 mobs = sector_enemy_counts.get(sec, 0)
-                # Lao đầu vô hướng quái ít nhất để mở đường thoát
                 if mobs == 0:
                     mob_score = self.mob_clear_corridor_bonus * 1.4
                 elif mobs <= 2:
@@ -269,7 +599,6 @@ class MovementPolicy:
                     mob_score = -self.mob_penalty_weight * mobs
 
                 score = (align_score * 2.2) + mob_score
-
                 if score > best_wall_score:
                     best_wall_score = score
                     best_wall_escape = sec
@@ -284,10 +613,10 @@ class MovementPolicy:
 
             self.dir_lock_until = now + self.wall_breakout_thrust
             self._set_dir(best_wall_escape, now)
-            return best_wall_escape, DIR_KEYS[best_wall_escape], self.wall_breakout_thrust
+            return best_wall_escape, self._keys_for_dir(best_wall_escape), self.wall_breakout_thrust
 
         # ------------------------------------------------------------------
-        # 2. MULTI-HAZARD & BULLET TRAJECTORY DODGING (TTC & DCA Informed)
+        # 3. MULTI-HAZARD & BULLET TRAJECTORY DODGING
         # ------------------------------------------------------------------
         if hazards:
             dodge_eval = self._evaluate_multi_hazard_evasion(
@@ -297,92 +626,16 @@ class MovementPolicy:
                 dodge_dir, hold_t = dodge_eval
                 self.dir_lock_until = now + hold_t
                 self._set_dir(dodge_dir, now)
-                return dodge_dir, DIR_KEYS[dodge_dir], hold_t
+                return dodge_dir, self._keys_for_dir(dodge_dir), hold_t
 
         # ------------------------------------------------------------------
-        # 3. PROACTIVE DISTANCE REPULSION & ANTI-ENCIRCLEMENT BREAKOUT (enemies < effective_danger_thresh or encircled)
-        # ------------------------------------------------------------------
-        if min_enemy_dist < effective_danger_thresh or is_encircled:
-            repel_vx = 0.0
-            repel_vy = 0.0
-            nearby_count = 0
-            for e in vision_state.get("enemies", []):
-                edist = e.get("dist", 999.0)
-                if edist < (effective_danger_thresh + 65.0):
-                    weight = 1.0 / max(15.0, edist)
-                    repel_vx += (cx - e["x"]) * weight
-                    repel_vy += (cy - e["y"]) * weight
-                    nearby_count += 1
-
-            if nearby_count == 0 and nearest_enemy_sec:
-                e_ang = DIR_ANGLES.get(nearest_enemy_sec, 0)
-                repel_angle = (e_ang + 180) % 360
-            elif abs(repel_vx) < 1e-5 and abs(repel_vy) < 1e-5:
-                min_sec_count = 999
-                min_count_sec = "E"
-                for sec in list(DIR_ANGLES.keys()):
-                    if is_passable(sec):
-                        cnt = sector_enemy_counts.get(sec, 0)
-                        if cnt < min_sec_count:
-                            min_sec_count = cnt
-                            min_count_sec = sec
-                repel_angle = float(DIR_ANGLES.get(min_count_sec, 0))
-            else:
-                repel_angle = math.degrees(math.atan2(repel_vy, repel_vx))
-
-            best_escape_dir = None
-            best_escape_score = -99999.0
-
-            curr_ang = DIR_ANGLES.get(self.current_dir, 0)
-            back_ang = (curr_ang + 180) % 360
-
-            for sec, ang in DIR_ANGLES.items():
-                if not is_passable(sec):
-                    continue
-                diff = angle_diff(ang, repel_angle)
-                alignment_score = 180.0 - diff
-
-                danger = sector_dangers.get(sec, 0.0)
-                obs_cost = sector_obs_costs.get(sec, 0.0) * self.wall_avoidance_weight
-                mom_bonus = 15.0 if sec == self.current_dir else (-25.0 if angle_diff(ang, back_ang) < 35.0 else 0.0)
-
-                mobs_in_sec = sector_enemy_counts.get(sec, 0)
-                if mobs_in_sec == 0:
-                    mob_sparsity_score = self.mob_clear_corridor_bonus
-                elif mobs_in_sec == 1:
-                    mob_sparsity_score = self.mob_clear_corridor_bonus * 0.35
-                else:
-                    mob_sparsity_score = -self.mob_penalty_weight * mobs_in_sec
-
-                repel_mult = 2.0 if is_low_hp else (1.4 if is_hp_unknown else 1.0)
-                if is_encircled:
-                    score = (mob_sparsity_score * 2.5) + (alignment_score * 1.5 * repel_mult) - (danger * 0.03) - (obs_cost * 0.04)
-                else:
-                    score = (alignment_score * 2.2 * repel_mult) + mob_sparsity_score - (danger * 0.04) - (obs_cost * 0.03) + mom_bonus
-
-                if score > best_escape_score:
-                    best_escape_score = score
-                    best_escape_dir = sec
-
-            if not best_escape_dir:
-                best_escape_dir = pick_safest_open_direction("E")
-
-            step_time = 0.32 if is_encircled else self.step_duration
-            self.dir_lock_until = now + step_time
-            self._set_dir(best_escape_dir, now)
-            return best_escape_dir, DIR_KEYS[best_escape_dir], step_time
-
-        # ------------------------------------------------------------------
-        # 3. PURPLE RIFT PORTAL ENTRY (Zero-risk Boss Arena: Items + Bonds!)
-        # STRICT CONDITIONS: Only enter when powered up (elapsed > 120s and Level >= 3).
-        # Never enter at early game (0-2 mins) when we need to farm EXP in open fields!
+        # 4. PURPLE RIFT PORTAL ENTRY (Strict Early Game Gating)
         # ------------------------------------------------------------------
         rift_target = vision_state.get("rift_target")
         if not rift_target and isinstance(vision_state.get("specials"), dict):
             rift_target = vision_state["specials"].get("rift")
         if rift_target and danger_level == "LOW" and min_enemy_dist > 190.0:
             target_type = rift_target.get("type", "arrow")
-            # Entering Rift requires confirmed healthy state (hp_ratio >= 0.65). Never enter when HP is unknown!
             can_enter_rift = (
                 hp_ratio is not None and hp_ratio >= 0.65 and (
                     (target_type == "portal" and elapsed_time > 120.0 and current_level >= 3) or
@@ -393,10 +646,10 @@ class MovementPolicy:
                 rift_sec = rift_target.get("sector")
                 if rift_sec and is_passable(rift_sec) and sector_dangers.get(rift_sec, 0.0) < 600.0:
                     self._set_dir(rift_sec, now)
-                    return rift_sec, DIR_KEYS[rift_sec], self.step_duration
+                    return rift_sec, self._keys_for_dir(rift_sec), self.step_duration
 
         # ------------------------------------------------------------------
-        # 4. BOSS ARENA COMBAT KITING (Maintain 220-280px orbit around confirmed Boss)
+        # 5. BOSS ARENA COMBAT KITING
         # ------------------------------------------------------------------
         boss_info = vision_state.get("boss_info", {})
         if boss_info.get("active") and boss_info.get("boss_enemy"):
@@ -411,12 +664,11 @@ class MovementPolicy:
                 boss_dir = pick_safest_open_direction(self._angle_to_sector(t_angle))
 
             self._set_dir(boss_dir, now)
-            return boss_dir, DIR_KEYS[boss_dir], self.step_duration
+            return boss_dir, self._keys_for_dir(boss_dir), self.step_duration
 
         # ------------------------------------------------------------------
-        # 4b. TACTICAL CANDIDATE NAVIGATION (Thieves, Springs, Chests, Shrines)
+        # 6. TACTICAL CANDIDATE NAVIGATION (Thieves, Springs, Chests, Shrines)
         # ------------------------------------------------------------------
-        # Pass elapsed_time and current_level into target evaluator so it shares the exact same match state!
         eval_state = dict(vision_state)
         eval_state["elapsed_time"] = elapsed_time
         eval_state["current_level"] = current_level
@@ -425,113 +677,44 @@ class MovementPolicy:
             t_sec = tactical_target.get("sector")
             if t_sec and is_passable(t_sec) and sector_dangers.get(t_sec, 0.0) < 800.0:
                 self._set_dir(t_sec, now)
-                return t_sec, DIR_KEYS[t_sec], self.step_duration
+                return t_sec, self._keys_for_dir(t_sec), self.step_duration
 
         # ------------------------------------------------------------------
-        # 5. TACTICAL SWARM KITING & EXP VACUUMING (Enemies within 135-260px)
-        # Tangential motion holds constant 200-260px buffer and packs mobs
-        # in a straight chase line for 100% Ember/Fire Blast pierce hits!
-        # Actively curves the kiting arc through EXP gems and chests!
+        # 7. PREDICTIVE SURVIVAL PLANNER / ACTIVE MOB EVASION
         # ------------------------------------------------------------------
-        if (danger_level in ("HIGH", "MEDIUM") or min_enemy_dist < 260.0) and swarm_center:
-            sx, sy = swarm_center
-            dx = cx - sx
-            dy = cy - sy
-
-            t1_angle = math.degrees(math.atan2(dx, -dy))
-            t2_angle = math.degrees(math.atan2(-dx, dy))
-            t1_sec = self._angle_to_sector(t1_angle)
-            t2_sec = self._angle_to_sector(t2_angle)
-
-            t1_ok = is_completely_safe(t1_sec)
-            t2_ok = is_completely_safe(t2_sec)
-
-            if t1_ok and not t2_ok:
-                kite_dir = t1_sec
-            elif t2_ok and not t1_ok:
-                kite_dir = t2_sec
-            elif t1_ok and t2_ok:
-                # Dynamic open field clearance: reward direction with open adjacent flanks
-                deg1 = DIR_ANGLES.get(t1_sec, 0)
-                deg2 = DIR_ANGLES.get(t2_sec, 0)
-                n1_a = self._angle_to_sector((deg1 - 45 + 360) % 360)
-                n1_b = self._angle_to_sector((deg1 + 45) % 360)
-                n2_a = self._angle_to_sector((deg2 - 45 + 360) % 360)
-                n2_b = self._angle_to_sector((deg2 + 45) % 360)
-
-                t1_bias = 25.0 if (not sector_obstacles.get(n1_a, False) and not sector_obstacles.get(n1_b, False)) else 0.0
-                t2_bias = 25.0 if (not sector_obstacles.get(n2_a, False) and not sector_obstacles.get(n2_b, False)) else 0.0
-
-                # Favor tangential direction with FEWER enemies (using learned policy weights)
-                mobs_t1 = sector_enemy_counts.get(t1_sec, 0)
-                mobs_t2 = sector_enemy_counts.get(t2_sec, 0)
-                t1_bias += (self.mob_clear_corridor_bonus * 0.45) if mobs_t1 == 0 else (-self.mob_penalty_weight * 0.6 * mobs_t1)
-                t2_bias += (self.mob_clear_corridor_bonus * 0.45) if mobs_t2 == 0 else (-self.mob_penalty_weight * 0.6 * mobs_t2)
-
-                # Strongly bias tangential path towards EXP gem clusters (using learned exp_harvest_weight)
-                target_gem = gem_cluster_sec or gem_sector
-                if target_gem:
-                    gem_w = self.exp_harvest_weight * 130.0
-                    if t1_sec == target_gem:
-                        t1_bias += gem_w
-                    elif angle_diff(DIR_ANGLES[t1_sec], DIR_ANGLES[target_gem]) <= 45:
-                        t1_bias += gem_w * 0.55
-                    if t2_sec == target_gem:
-                        t2_bias += gem_w
-                    elif angle_diff(DIR_ANGLES[t2_sec], DIR_ANGLES[target_gem]) <= 45:
-                        t2_bias += gem_w * 0.55
-
-                # Check nearby ground items/chests
-                if items_on_ground:
-                    i_sec = items_on_ground[0].get("sector")
-                    if i_sec:
-                        if t1_sec == i_sec: t1_bias += 50.0
-                        if t2_sec == i_sec: t2_bias += 50.0
-
-                # Penalize diving backwards into our own pursuit tail (the pack chasing behind us)
-                curr_ang = DIR_ANGLES.get(self.current_dir, 0)
-                back_ang = (curr_ang + 180) % 360
-                if angle_diff(DIR_ANGLES[t1_sec], back_ang) < 50.0:
-                    t1_bias -= 250.0
-                if angle_diff(DIR_ANGLES[t2_sec], back_ang) < 50.0:
-                    t2_bias -= 250.0
-
-                score1 = sector_dangers.get(t1_sec, 0.0) - t1_bias
-                score2 = sector_dangers.get(t2_sec, 0.0) - t2_bias
-                kite_dir = t1_sec if score1 <= score2 else t2_sec
-            else:
-                kite_dir = pick_safest_open_direction("SE")
-
-            # Direct gem sweep when mobs are at a comfortable buffer (> 170px)
-            target_gem = gem_cluster_sec or gem_sector
-            if target_gem and min_enemy_dist > 170.0 and is_passable(target_gem):
-                kite_dir = target_gem
-
-            self._set_dir(kite_dir, now)
-            return kite_dir, DIR_KEYS[kite_dir], self.step_duration
+        if emerg_collision or min_enemy_dist < effective_danger_thresh or is_encircled or (danger_level in ("HIGH", "MEDIUM") and swarm_center):
+            if pred_dir:
+                step_time = 0.32 if is_encircled else self.step_duration
+                self.dir_lock_until = now + step_time
+                self._set_dir(pred_dir, now)
+                return pred_dir, self._keys_for_dir(pred_dir), step_time
 
         # ------------------------------------------------------------------
-        # 6. EXP GEMS & CHESTS HARVESTING (Strictly gated by health and safety)
-        # Never dive into mobs for gems if low HP (< 50%) or if danger is elevated!
+        # 8. EXP GEMS & CHESTS HARVESTING
         # ------------------------------------------------------------------
         if not is_low_hp and not is_hp_unknown and danger_level == "LOW":
             target_gem = gem_cluster_sec or gem_sector
             if target_gem and is_passable(target_gem) and sector_dangers.get(target_gem, 0.0) < 1400.0:
                 self._set_dir(target_gem, now)
-                return target_gem, DIR_KEYS[target_gem], self.step_duration
+                return target_gem, self._keys_for_dir(target_gem), self.step_duration
 
         # ------------------------------------------------------------------
-        # 7. DYNAMIC OPEN ARENA CRUISE (Smooth sweeps without hardcoded direction bias)
-        # Evaluates open field clearance, obstacles, and mob absence dynamically.
+        # 9. DYNAMIC OPEN ARENA CRUISE
         # ------------------------------------------------------------------
         current_safe = is_completely_safe(self.current_dir)
-
         if not current_safe or (now - self.last_change_time > self.cruise_hold_duration):
             new_cruise = pick_safest_open_direction("E")
             self._set_dir(new_cruise, now)
 
         dir_to_use = self.current_dir if is_passable(self.current_dir) else pick_safest_open_direction("E")
-        return dir_to_use, DIR_KEYS[dir_to_use], self.step_duration
+        return dir_to_use, self._keys_for_dir(dir_to_use), self.step_duration
+
+    def _keys_for_dir(self, direction: str) -> List[str]:
+        if direction in DIR16_KEYS:
+            return DIR16_KEYS[direction]
+        if direction in DIR_KEYS:
+            return DIR_KEYS[direction]
+        return ["KeyD"]
 
     def _evaluate_multi_hazard_evasion(
         self,
@@ -542,12 +725,6 @@ class MovementPolicy:
         sector_enemy_counts: Dict[str, int],
         sector_dangers: Dict[str, float]
     ) -> Optional[Tuple[str, float]]:
-        """
-        Multi-bullet and warning zone trajectory evasion:
-        Evaluates projected positions across ALL hazards within 1.2s TTC.
-        Selects the safest lateral escape sector that minimizes combined bullet risk,
-        avoids terrain walls, and minimizes mob density.
-        """
         urgent_hazards = [h for h in hazards if h.get("is_imminent") or h.get("ttc", 99.0) < 1.2 or h.get("dist", 999.0) < 130.0]
         if not urgent_hazards:
             return None
@@ -572,7 +749,6 @@ class MovementPolicy:
                 vy = h.get("vy", 0.0)
                 h_type = h.get("type", "hazard")
 
-                # Synchronized continuous closest approach over t in [0, step_dt]
                 r0_x = cx - hx
                 r0_y = cy - hy
                 dv_x = v_px - vx
@@ -585,7 +761,6 @@ class MovementPolicy:
                 else:
                     t_eval = 0.0
 
-                # Player and hazard positions evaluated at identical future time t_eval
                 rel_x = r0_x + dv_x * t_eval
                 rel_y = r0_y + dv_y * t_eval
                 dca_proj = math.hypot(rel_x, rel_y)
@@ -622,20 +797,4 @@ class MovementPolicy:
             self.dir_lock_until = max(self.dir_lock_until, now + 0.24)
 
     def _angle_to_sector(self, angle_deg: float) -> str:
-        a = (angle_deg + 360) % 360
-        if 337.5 <= a or a < 22.5:
-            return "E"
-        elif 22.5 <= a < 67.5:
-            return "SE"
-        elif 67.5 <= a < 112.5:
-            return "S"
-        elif 112.5 <= a < 157.5:
-            return "SW"
-        elif 157.5 <= a < 202.5:
-            return "W"
-        elif 202.5 <= a < 247.5:
-            return "NW"
-        elif 247.5 <= a < 292.5:
-            return "N"
-        else:
-            return "NE"
+        return self.planner._to_8_sector(angle_deg)

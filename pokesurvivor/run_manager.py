@@ -2,7 +2,7 @@ import time
 import os
 import sys
 import threading
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
@@ -22,7 +22,84 @@ from pokesurvivor.memory_store import MemoryStore
 from pokesurvivor.metrics_reporter import MetricsReporter
 from pokesurvivor.game_state_adapter import GameStateAdapter
 from pokesurvivor.coin_tracker import CoinTracker
+from pokesurvivor.decision_tracer import DecisionTracer
 from pokesurvivor.config import HOTKEY_TOGGLE, HOTKEY_EMERGENCY_STOP
+
+class LoopProfiler:
+    """
+    Real-time latency profiler measuring:
+    - capture: frame grab latency
+    - state_read: unified state extraction latency
+    - decision: predictive planner decision latency
+    - action_dispatch: keyboard input dispatch latency
+    - total_loop: full loop cycle latency
+    Computes Median (P50), P95, and control loop frequency (Hz).
+    """
+    def __init__(self, window_size: int = 120):
+        self.window_size = window_size
+        self.samples: Dict[str, List[float]] = {
+            "capture": [],
+            "state_read": [],
+            "decision": [],
+            "action_dispatch": [],
+            "total_loop": []
+        }
+        self.total_cycles: int = 0
+        self.start_time: float = time.time()
+
+    def record(self, stage: str, duration_sec: float):
+        if stage in self.samples:
+            ms = duration_sec * 1000.0
+            buf = self.samples[stage]
+            buf.append(ms)
+            if len(buf) > self.window_size:
+                buf.pop(0)
+
+    def record_cycle(self):
+        self.total_cycles += 1
+
+    def get_summary(self) -> Dict[str, Any]:
+        elapsed = max(0.1, time.time() - self.start_time)
+        freq_hz = self.total_cycles / elapsed
+        summary = {"frequency_hz": round(freq_hz, 1), "total_cycles": self.total_cycles}
+
+        for stage, vals in self.samples.items():
+            if vals:
+                s_sorted = sorted(vals)
+                n = len(s_sorted)
+                p50 = s_sorted[int(n * 0.50)]
+                p95 = s_sorted[min(n - 1, int(n * 0.95))]
+                summary[stage] = {
+                    "median_ms": round(p50, 2),
+                    "p95_ms": round(p95, 2),
+                    "min_ms": round(s_sorted[0], 2),
+                    "max_ms": round(s_sorted[-1], 2)
+                }
+            else:
+                summary[stage] = {"median_ms": 0.0, "p95_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0}
+        return summary
+
+    def format_report(self) -> str:
+        s = self.get_summary()
+        freq = s.get("frequency_hz", 0.0)
+        c = s.get("capture", {})
+        sr = s.get("state_read", {})
+        d = s.get("decision", {})
+        ad = s.get("action_dispatch", {})
+        tot = s.get("total_loop", {})
+        return (
+            f"\n============================================================\n"
+            f"⏱️ THỐNG KÊ ĐỘ TRỄ VÒNG LẶP & ĐIỀU KHIỂN (LOOP LATENCY PROFILE)\n"
+            f"============================================================\n"
+            f"⚡ Tần số quyết định (Control Loop Freq): {freq:.1f} Hz ({s.get('total_cycles', 0)} chu kỳ)\n"
+            f"🔄 Chu kỳ tổng (Total Loop Cycle)     : Median = {tot.get('median_ms', 0):.1f} ms | P95 = {tot.get('p95_ms', 0):.1f} ms\n"
+            f"📸 Thu thập ảnh (Visual Capture)     : Median = {c.get('median_ms', 0):.1f} ms | P95 = {c.get('p95_ms', 0):.1f} ms\n"
+            f"🔍 Trích xuất trạng thái (State Read) : Median = {sr.get('median_ms', 0):.1f} ms | P95 = {sr.get('p95_ms', 0):.1f} ms\n"
+            f"🧠 Lập kế hoạch (Decision Planner)    : Median = {d.get('median_ms', 0):.1f} ms | P95 = {d.get('p95_ms', 0):.1f} ms\n"
+            f"⌨️ Gửi lệnh phím (Action Dispatch)    : Median = {ad.get('median_ms', 0):.1f} ms | P95 = {ad.get('p95_ms', 0):.1f} ms\n"
+            f"============================================================"
+        )
+
 
 class RunManager:
     def __init__(
@@ -47,6 +124,7 @@ class RunManager:
         self.movement_policy = MovementPolicy(self.policy)
         self.upgrade_policy = UpgradePolicy(self.policy)
         self.coin_tracker = CoinTracker()
+        self.decision_tracer = DecisionTracer()
 
         self.browser_ctrl: Optional[BrowserController] = None
         self.observer: Optional[GameObserver] = None
@@ -82,7 +160,7 @@ class RunManager:
 
     def run_session(self):
         print("\n" + "=" * 60)
-        print("🚀 KHỞI ĐỘNG HỆ THỐNG POKÉSURVIVOR AUTOPLAY BOT")
+        print("🚀 KHỞI ĐỘNG HỆ THỐNG POKÉSURVIVOR AUTOPLAY BOT (ROUND 9)")
         print("=" * 60)
         print(f"📌 Chế độ: {'Chỉ quan sát (Observe Only)' if self.observe_only else 'Tự động chơi hoàn toàn'}")
         print(f"📌 Số lượt tối đa: {self.max_runs}")
@@ -110,7 +188,6 @@ class RunManager:
                 completed_runs += 1
                 print(f"\n--- BẮT ĐẦU VÁN #{completed_runs}/{self.max_runs} ---")
                 
-                # Refresh policy
                 self.policy = self.learning_engine.current_policy
                 self.movement_policy.update_config(self.policy)
                 self.upgrade_policy.update_config(self.policy)
@@ -119,135 +196,105 @@ class RunManager:
                 if not success or self.emergency_stopped:
                     break
 
-                # Immediately proceed to next match without delay (nghỉ 3 giây đã được bỏ)
-                if completed_runs < self.max_runs and self.is_running:
-                    pass
-
             print("\n" + "=" * 60)
             print("🏁 HOÀN TẤT PHIÊN CHẠY (SESSION FINISHED)")
-            print(f"💰 {self.coin_tracker.format_status_line()}")
-            print(self.metrics_reporter.generate_comparison_table())
+            print("=" * 60)
 
-        except Exception as e:
-            print(f"[!] Lỗi trong phiên chạy: {e}")
         finally:
-            if self.browser_ctrl:
-                self.browser_ctrl.release_all_keys()
-                self.browser_ctrl.stop()
+            self.browser_ctrl.close()
 
     def _run_single_match(self, run_index: int) -> bool:
-        """Executes a single game match from start to game-over."""
-        def on_solo_ready():
-            partner = self.observer.get_selected_partner()
-            if partner and partner.get("name") and partner.get("name") != "Unknown":
-                p_name = partner.get("name")
-                p_move = partner.get("starting_move") or partner.get("startsWith") or ""
-                p_dex = partner.get("dex")
-                print(f"[*] 🎯 Nhận diện Pokémon xuất trận: No. {p_dex if p_dex else '?'} {p_name} | Chiêu đầu: '{p_move}'")
+        if not self.browser_ctrl.start_new_run():
+            print("[!] Không thể bắt đầu ván mới qua UI.")
+            return False
+
+        # Read active Pokemon context from DOM or G
+        try:
+            p_data = self.browser_ctrl.page.evaluate('''() => {
+                let name = "Unknown";
+                let move = "";
+                let dex = null;
+                if (window.G && window.G.player) {
+                    name = window.G.player.name || window.G.player.pokemon || name;
+                    dex = window.G.player.dex || null;
+                }
+                const nameEl = document.querySelector('[data-testid="selected-pokemon-name"], .pokemon-select-name, .character-name');
+                if (nameEl && nameEl.innerText) name = nameEl.innerText.trim();
+                return { name: name, move: move, dex: dex };
+            }''')
+            p_name = p_data.get("name", "Unknown")
+            p_move = p_data.get("move", "")
+            p_dex = p_data.get("dex")
+            if p_name and p_name != "Unknown":
                 self.upgrade_policy.set_active_pokemon(p_name, starting_move=p_move, dex=p_dex)
                 self.state_tracker.set_active_pokemon(p_name)
                 self.perception.set_active_pokemon(p_name)
+                print(f"[*] Đã nhận diện Pokemon xuất trận: {p_name} (Dex: {p_dex})")
             else:
-                print("[*] ⚠️ Chưa nhận diện được Pokémon cụ thể từ Solo screen. Sử dụng chiến lược thích ứng linh hoạt.")
                 self.upgrade_policy.set_active_pokemon("Unknown", starting_move="", dex=None)
                 self.state_tracker.set_active_pokemon("Unknown")
                 self.perception.set_active_pokemon("Unknown")
-
-        print("[*] Đang vào trận Solo...")
-        if not self.browser_ctrl.start_solo_game(on_solo_screen_callback=on_solo_ready):
-            print("[!] Không thể bấm bắt đầu Solo. Kiểm tra lại giao diện.")
-            return False
-
-        # 2. Wait for match to be ready using GameStateAdapter unified state with DOM/gState/activeScreen fallbacks
-        print("[*] Chờ trận đấu sẵn sàng (phase: running)...")
-        ready = False
-        for wait_i in range(100):  # wait up to 35 seconds
-            if self.emergency_stopped:
-                return False
-
-            current_phase = "none"
-            active_scr = "unknown"
-            metrics = {}
-
-            if self.game_state_adapter:
-                unified_st = self.game_state_adapter.read_unified_state(frame_img=None, is_moving=False)
-                ui_st = unified_st.get("ui", {})
-                current_phase = ui_st.get("phase", "none")
-                active_scr = ui_st.get("active_screen", "unknown")
-                metrics = unified_st.get("metrics", {})
-            elif self.observer:
-                dom_state = self.observer.read_dom_state()
-                current_phase = dom_state.get("phase", "none")
-                active_scr = dom_state.get("activeScreen", "unknown")
-
-            # Check if match is running via phase, active_screen, or live metrics
-            if current_phase == "running":
-                ready = True
-                break
-            if active_scr == "game" and current_phase not in ("ended", "gameover"):
-                ready = True
-                break
-            if metrics.get("kills") is not None or metrics.get("time_seconds") is not None:
-                ready = True
-                break
-
-            if wait_i % 10 == 0 and wait_i > 0:
-                print(f"  ...Đang tải trận (Current phase: '{current_phase}', screen: '{active_scr}') [{wait_i * 0.35:.1f}s]")
-            time.sleep(0.35)
-
-        if not ready:
-            print("[!] Quá thời gian chờ game bắt đầu.")
-            return False
-
-        print("[*] TRẬN ĐẤU ĐÃ BẮT ĐẦU! Bắt đầu chu trình quan sát & điều khiển...")
-        self.state_tracker.start_run()
-        self.upgrade_policy.reset_match()
-
-        # Ensure native Auto-Aim is strictly in AUTO mode (never toggle off)
-        try:
-            aim_mode = self.browser_ctrl.page.evaluate('''() => {
-                try {
-                    const raw = localStorage.getItem('ps.settings');
-                    if (raw) {
-                        const s = JSON.parse(raw);
-                        if (s.aimMode !== 'auto') {
-                            s.aimMode = 'auto';
-                            localStorage.setItem('ps.settings', JSON.stringify(s));
-                            return 'toggled_to_auto';
-                        }
-                        return 'already_auto';
-                    }
-                } catch(e) {}
-                return 'unknown';
-            }''')
-            if aim_mode == 'toggled_to_auto':
-                # Synchronize in-memory settings with KeyT
-                self.browser_ctrl.press_key("t")
-                print("[*] Native Auto-Aim đã kích hoạt chế độ AUTO (tự động khóa mục tiêu và bắn).")
-            else:
-                print("[*] Native Auto-Aim đã ở chế độ AUTO (tự động khóa mục tiêu và bắn).")
         except Exception:
             pass
 
-        active_keys = []
+        self.state_tracker.start_run(run_index)
+        self.upgrade_policy.reset_match()
+
+        print("[*] Đang chờ trận đấu load xong (chờ canvas sẵn sàng)...")
+        start_wait = time.time()
+        while time.time() - start_wait < 20.0:
+            if not self.is_running or self.emergency_stopped:
+                return False
+
+            phase_info = self.game_state_adapter.get_current_phase()
+            phase = phase_info.get("phase", "none")
+            source = phase_info.get("source", "none")
+
+            if phase == "running":
+                print(f"[*] Trận đấu đã bắt đầu! Sẵn sàng điều khiển. (Phát hiện qua: {source})")
+                break
+            
+            raw_data = self.game_state_adapter._fetch_browser_data()
+            if raw_data.get("hasG") and raw_data.get("gState"):
+                g_phase = raw_data["gState"].get("gameState")
+                if g_phase in ("running", "active", "combat"):
+                    print(f"[*] Trận đấu đã bắt đầu qua window.G ({g_phase})!")
+                    break
+
+            time.sleep(0.3)
+        else:
+            print("[!] Timeout chờ trận đấu bắt đầu. Thử bỏ qua và tiếp tục...")
+
+        # Setup Canvas Telemetry Hook
+        try:
+            self.game_state_adapter.setup_canvas_telemetry()
+        except Exception:
+            pass
+
+        active_keys: List[str] = []
         match_start_time = time.time()
-        last_move_time = time.time()
         last_vision_time = 0.0
         last_rift_log_time = 0.0
         last_boss_log_time = 0.0
         last_status_log_time = 0.0
-        last_dodge_log_time = 0.0
         last_buffer_log_time = 0.0
         last_overlay_time = 0.0
         last_slot_cycle_time = 0.0
         last_zmove_time = 0.0
-        last_consumable_time = 0.0
+        last_profiler_log_time = 0.0
+        last_consumable_times = {"5": 0.0, "6": 0.0, "7": 0.0, "8": 0.0}
+
         has_rerolled_this_choice = False
         unified_state = None
         dom_results = None
+        loop_counter = 0
+
+        # Real-time latency profiler
+        profiler = LoopProfiler()
 
         while self.is_running and not self.emergency_stopped:
             loop_start = time.time()
+            loop_counter += 1
             elapsed = loop_start - match_start_time
 
             if elapsed > self.max_duration_per_run:
@@ -255,18 +302,31 @@ class RunManager:
                 self.state_tracker.end_reason = "timeout"
                 break
 
-            # 1. Capture visual frame (ultra-fast toDataURL)
-            now_t = time.time()
-            frame = None
-            if now_t - last_vision_time >= 0.08 or unified_state is None:
-                frame = self.observer.capture_frame()
-                last_vision_time = now_t
+            # Check if memory state is verified from window.G
+            is_mem_verified = False
+            if unified_state is not None:
+                p_src = unified_state.get("sources", {}).get("player", "")
+                is_mem_verified = (p_src == "window_G" or unified_state.get("is_memory_verified", False))
 
-            # 2. Read Harmonized Unified State (window.G, Canvas telemetry hook, DOM, OpenCV)
+            # 1. Capture visual frame (Decoupled fast loop: 1.0s when memory is verified, 0.08s on vision fallback)
+            now_t = time.time()
+            vision_interval = 1.0 if is_mem_verified else 0.08
+            frame = None
+            if (now_t - last_vision_time >= vision_interval) or (unified_state is None):
+                t_cap_start = time.time()
+                frame = self.observer.capture_frame()
+                profiler.record("capture", time.time() - t_cap_start)
+                last_vision_time = now_t
+            else:
+                profiler.record("capture", 0.0)
+
+            # 2. Read Harmonized Unified State (window.G, Canvas hook, DOM, OpenCV)
+            t_sr_start = time.time()
             unified_state = self.game_state_adapter.read_unified_state(
                 frame_img=frame,
                 is_moving=bool(active_keys)
             )
+            profiler.record("state_read", time.time() - t_sr_start)
 
             # 3. Extract UI & Phase
             dom_state = unified_state.get("ui", {})
@@ -282,7 +342,6 @@ class RunManager:
                     dom_results = self.observer.read_match_results()
                     if dom_results and dom_results.get("available"):
                         break
-                    # Also check unified_state metrics
                     fresh_metrics = self.game_state_adapter._extract_metrics(self.game_state_adapter._fetch_browser_data())
                     if fresh_metrics.get("is_match_over"):
                         dom_results = fresh_metrics
@@ -295,7 +354,7 @@ class RunManager:
                     pass
                 break
 
-            # 4. Handle Modals: Level Up, Rift Boss Bond/Fusion, Item Swap, or Chest
+            # 4. Handle Modals: Level Up, Rift Boss Bond, Item Swap, Chest
             if dom_state.get("choice_open"):
                 self.browser_ctrl.release_all_keys()
                 active_keys = []
@@ -313,121 +372,75 @@ class RunManager:
                         modal_kind=modal_kind
                     )
                     if best_card:
-                        # Reroll if card score is below viable threshold (< 500) and reroll is available
                         if best_card.get("should_reroll") and not has_rerolled_this_choice and not self.observe_only and not self.is_paused:
                             try:
                                 reroll_avail = self.browser_ctrl.page.evaluate('''() => {
                                     const rr = document.querySelector('[data-testid="reroll"]');
-                                    if (rr && !rr.disabled && rr.offsetParent !== null) {
-                                        const m = rr.innerText.match(/\\((\\d+)\\)/);
-                                        return (!m || parseInt(m[1]) > 0);
-                                    }
-                                    return false;
+                                    return rr && !rr.disabled && rr.style.display !== 'none';
                                 }''')
                                 if reroll_avail:
-                                    print(f"  -> Thẻ điểm thấp (< 500) và có Reroll khả dụng: Bấm Reroll (phím 'r')!")
-                                    self.browser_ctrl.press_key("r")
+                                    print(f"[{elapsed:.1f}s] 🔄 REROLL: Thẻ điểm quá thấp (<500), kích hoạt Reroll!")
+                                    self.browser_ctrl.click_selector('[data-testid="reroll"]')
                                     has_rerolled_this_choice = True
-                                    time.sleep(0.5)
+                                    time.sleep(0.4)
                                     continue
                             except Exception:
                                 pass
 
-                        has_rerolled_this_choice = False
-                        print(f"  -> Bot chọn: '{best_card.get('name')}' ({best_card.get('tag')}) - Lý do: {best_card.get('selection_reason')}")
-                        if not self.observe_only and not self.is_paused:
-                            self.browser_ctrl.click_selector(best_card.get("selector"))
-                            key = best_card.get("key", "1")
-                            if key:
-                                self.browser_ctrl.press_key(key)
-                        self.state_tracker.record_upgrade(
-                            best_card,
-                            modal_kind=modal_kind,
-                            verified_level=dom_state.get("verified_level")
-                        )
+                        choice_idx = best_card["index"]
+                        choice_name = best_card.get("name", "Unknown")
+                        sel_reason = best_card.get("selection_reason", "standard_pick")
+                        print(f"[{elapsed:.1f}s] 🎯 CHỌN KỸ NĂNG: [{choice_name}] (Thẻ #{choice_idx + 1} | Lý do: {sel_reason})")
 
-                        modal_wait_start = time.time()
-                        while time.time() - modal_wait_start < 1.6:
-                            time.sleep(0.08)
-                            st = self.observer.read_dom_state()
-                            if not st.get("choiceOpen"):
-                                break
+                        if not self.observe_only and not self.is_paused:
+                            self.browser_ctrl.select_upgrade_choice(choice_idx)
+                            self.state_tracker.record_upgrade(choice_name, choice_idx)
+
+                        has_rerolled_this_choice = False
+                        time.sleep(0.35)
                 continue
 
-            # 5. Update State Tracker with Unified State
-            self.state_tracker.update(dom_state, unified_state)
+            # 5. Track state metrics & health
+            self.state_tracker.update(
+                unified_state=unified_state,
+                elapsed_time=elapsed
+            )
 
-            # Announce Purple Rift Portal
-            rift_target = unified_state.get("rift_target")
-            if rift_target and (now_t - last_rift_log_time > 8.0):
-                t_type = rift_target.get("type", "portal")
-                if t_type == "portal" and elapsed > 120.0 and self.state_tracker.current_level >= 3:
-                    print(f"[{elapsed:.1f}s] 🌀 CỔNG RIFT TÍM: Đủ cấp và thực lực! Tiến vào cổng {rift_target.get('sector')} diệt Boss săn quà...")
-                else:
-                    print(f"[{elapsed:.1f}s] 🌀 CỔNG RIFT TÍM: Mũi tên chỉ hướng {rift_target.get('sector')} (Tiếp tục kiting farm ngọc EXP & tích lũy tiến hóa)")
-                last_rift_log_time = now_t
+            # 6. Movement & Combat Action Planning
+            t_dec_start = time.time()
+            dir_name, target_keys, hold_duration = self.movement_policy.select_movement(
+                vision_state=unified_state,
+                current_level=metrics.get("level", 1) or 1,
+                elapsed_time=elapsed
+            )
+            profiler.record("decision", time.time() - t_dec_start)
 
-            # Announce Boss Arena Combat
-            boss_info = unified_state.get("boss_info", {})
-            if boss_info.get("active") and (now_t - last_boss_log_time > 8.0):
-                print(f"[{elapsed:.1f}s] ⚔️ ĐANG ĐÁNH BOSS! Kiting vòng tròn quanh Boss và auto-aim xả chiêu...")
-                last_boss_log_time = now_t
+            # Telemetry Trace Recording (data/decision_trace.jsonl)
+            player_info = unified_state.get("player") or {}
+            self.decision_tracer.record_decision(
+                elapsed_time=elapsed,
+                player_state=player_info,
+                candidate_scores=getattr(self.movement_policy, "last_candidate_scores", {}),
+                chosen_direction=dir_name,
+                chosen_keys=target_keys,
+                risk_breakdown=getattr(self.movement_policy, "last_risk_breakdown", {}),
+                level=metrics.get("level", 1) or 1,
+                game_score=metrics.get("kills", 0.0) or 0.0,
+                now=now_t
+            )
 
-            # 6. Movement decision & execution driven by Unified State
-            if not self.observe_only and not self.is_paused and phase == "running":
-                dir_name, target_keys, step_dur = self.movement_policy.select_movement(
-                    unified_state,
-                    current_level=self.state_tracker.current_level,
-                    elapsed_time=elapsed
-                )
+            # Delayed HP Outcome Resolution (~0.9s post decision)
+            if loop_counter % 12 == 0:
+                cur_hp = player_info.get("hp_ratio")
+                self.decision_tracer.update_outcomes(cur_hp, now=now_t, delay_window=0.9)
 
-                min_e_dist = unified_state.get("min_enemy_dist", 9999.0)
-                e_sec = unified_state.get("nearest_enemy_sector", "?")
-                hazards = unified_state.get("hazards", [])
-                sector_obstacles = unified_state.get("sector_obstacles", {})
-                blocked_walls = [s for s, b in sector_obstacles.items() if b]
+            # Tactical telemetry logging
+            min_e_dist = unified_state.get("min_enemy_dist", 9999.0)
+            e_sec = unified_state.get("nearest_enemy_sector", "None")
+            hazards = unified_state.get("hazards", [])
 
-                # Wall breakout alert
-                if len(blocked_walls) >= 1 and (min_e_dist < 210.0 or unified_state.get("is_encircled", False)) and (now_t - last_buffer_log_time > 2.5):
-                    fewest_mobs = unified_state.get("sector_enemy_counts", {}).get(dir_name, 0)
-                    print(f"[{elapsed:.1f}s] 💥 PHÁ VÒNG VÂY TƯỜNG CỤT: Tường chặn {blocked_walls}! Lao đầu bứt tốc hướng {dir_name} ({fewest_mobs} quái - đường thoáng nhất) thoát hiểm!")
-                    last_buffer_log_time = now_t
-
-                # Encirclement breakout alert
-                elif unified_state.get("is_encircled", False) and (now_t - last_buffer_log_time > 2.5):
-                    fewest_mobs = unified_state.get("sector_enemy_counts", {}).get(dir_name, 0)
-                    print(f"[{elapsed:.1f}s] ⚡ ĐỘT PHÁ VÒNG VÂY: Quái vây quanh! Bứt tốc hướng {dir_name} ({fewest_mobs} quái - hướng thoáng nhất) thoát hiểm!")
-                    last_buffer_log_time = now_t
-
-                # Bullet dodge alert
-                elif hazards and hazards[0].get("dist", 999.0) < 165.0 and (now_t - last_dodge_log_time > 3.0):
-                    h_dist = hazards[0].get("dist", 0.0)
-                    h_sec = hazards[0].get("sector", "?")
-                    print(f"[{elapsed:.1f}s] ⚡ NÉ ĐẠN: Phát hiện đạn ở {h_dist:.0f}px hướng {h_sec}! Lạng sang hướng {dir_name} né đòn!")
-                    last_dodge_log_time = now_t
-
-                # Buffer alert (Repulsion Field active)
-                elif min_e_dist < 175.0 and (now_t - last_buffer_log_time > 3.0):
-                    print(f"[{elapsed:.1f}s] 🛡️ GIỮ CỰ LY (REPULSION): Quái áp sát {min_e_dist:.0f}px hướng {e_sec}! Kích hoạt lực đẩy phản xạ lùi hướng {dir_name} duy trì cự ly an toàn!")
-                    last_buffer_log_time = now_t
-
-                # Regular tactical telemetry with explicit source and confidence
-                elif now_t - last_status_log_time > 4.0:
-                    n_enemies = len(unified_state.get("enemies", []))
-                    n_hazards = len(hazards)
-                    hp_r = unified_state["player"].get("hp_ratio")
-                    hp_src = unified_state["sources"].get("player", "unobserved")
-                    conf = unified_state.get("confidence", 0.0)
-                    hp_str = f"{hp_r*100:.0f}%" if hp_r is not None else "UNKNOWN"
-                    dist_str = f"{min_e_dist:.0f}px ({e_sec})" if min_e_dist < 9000 else "Không có quái gần"
-                    print(f"[{elapsed:.1f}s] 🏃 Kiting: Hướng {dir_name} | Quái gần nhất: {dist_str} | Quái: {n_enemies} | Đạn: {n_hazards} | HP: {hp_str} (Nguồn: {hp_src}, Tin cậy: {conf*100:.0f}%)")
-                    last_status_log_time = now_t
-
-                # Periodically render and save annotated debug visual overlay
-                if frame is not None and (now_t - last_overlay_time > 4.0 or (hazards and hazards[0].get("is_imminent", False))):
-                    self.perception.create_debug_overlay(frame, unified_state, chosen_dir=dir_name)
-                    last_overlay_time = now_t
-
+            if not self.observe_only and not self.is_paused:
+                t_act_start = time.time()
                 # Update held keys if direction changed
                 if target_keys != active_keys:
                     for k in active_keys:
@@ -437,17 +450,41 @@ class RunManager:
                         if k not in active_keys:
                             self.browser_ctrl.key_down(k)
                     active_keys = target_keys
+                profiler.record("action_dispatch", time.time() - t_act_start)
 
-            # 6b. Active Combat Actions (Weapon slot cycling, Emergency Z-Move, Consumables)
+            # Regular status print
+            if now_t - last_status_log_time > 4.0:
+                n_enemies = len(unified_state.get("enemies", []))
+                n_hazards = len(hazards)
+                hp_r = player_info.get("hp_ratio")
+                hp_src = unified_state.get("sources", {}).get("player", "unobserved")
+                conf = unified_state.get("confidence", 0.0)
+                hp_str = f"{hp_r*100:.0f}%" if hp_r is not None else "UNKNOWN"
+                dist_str = f"{min_e_dist:.0f}px ({e_sec})" if min_e_dist < 9000 else "Không có quái gần"
+                print(f"[{elapsed:.1f}s] 🏃 Kiting: Hướng {dir_name} | Quái gần: {dist_str} | Quái: {n_enemies} | Đạn: {n_hazards} | HP: {hp_str} (Nguồn: {hp_src}, Tin cậy: {conf*100:.0f}%)")
+                last_status_log_time = now_t
+
+            # Periodically report loop profiler stats (every 8.0s)
+            if now_t - last_profiler_log_time > 8.0:
+                p_sum = profiler.get_summary()
+                tot_p50 = p_sum.get("total_loop", {}).get("median_ms", 0.0)
+                tot_p95 = p_sum.get("total_loop", {}).get("p95_ms", 0.0)
+                freq_now = p_sum.get("frequency_hz", 0.0)
+                print(f"[{elapsed:.1f}s] ⏱️ Vòng lặp: {freq_now:.1f}Hz | P50={tot_p50:.1f}ms, P95={tot_p95:.1f}ms | Chế độ: {'BỘ NHỚ NHANH (Fast Memory)' if is_mem_verified else 'THỊ GIÁC FALLBACK (OpenCV)'}")
+                last_profiler_log_time = now_t
+
+            # 6b. Active Combat Actions (Weapon slot cycling, Emergency Z-Move, Condition-based Consumables)
             if not self.observe_only and not self.is_paused and phase == "running":
-                # A. Weapon slot cycling ('e'): only active slot fires in PokéSurvivor; cycling every 0.22s unlocks all owned weapons!
-                if now_t - last_slot_cycle_time >= 0.22:
+                # A. Weapon slot cycling ('e'): optimized to 0.18s to continuously fire all unlocked weapons without input lag
+                if now_t - last_slot_cycle_time >= 0.18:
+                    t_slot_start = time.time()
                     self.browser_ctrl.press_key("e")
                     last_slot_cycle_time = now_t
+                    profiler.record("action_dispatch", time.time() - t_slot_start)
 
-                # B. Emergency Z-Move ('f'): triggers 400px screen-wide burst when critically low HP or surrounded
+                # B. Emergency Z-Move ('f'): triggers 400px burst when critically low HP or surrounded
                 if now_t - last_zmove_time >= 4.0 and unified_state:
-                    hp_r = unified_state["player"].get("hp_ratio")
+                    hp_r = player_info.get("hp_ratio")
                     is_crit_hp = (hp_r is not None and hp_r < 0.40)
                     is_heavy_encircled = unified_state.get("is_encircled", False)
                     n_close_mobs = len([e for e in unified_state.get("enemies", []) if e.get("dist", 999.0) < 180.0])
@@ -455,21 +492,22 @@ class RunManager:
                         self.browser_ctrl.press_key("f")
                         last_zmove_time = now_t
 
-                # C. Field consumables auto-use (keys 5-8): uses orbs/potions/berries in hotbar
-                if now_t - last_consumable_time >= 2.0:
-                    for k in ["5", "6", "7", "8"]:
-                        self.browser_ctrl.press_key(k)
-                    last_consumable_time = now_t
+                # C. Condition-based Consumables (Keys 5-8): Replaces blind periodic spam with tactical triggers
+                self._evaluate_and_trigger_consumables(now_t, unified_state, last_consumable_times)
 
-            # Throttle loop to ~25 FPS to maintain responsive control
+            # Throttle loop: 35-50 Hz when memory is verified (target dt = 0.022s), 25 Hz on vision fallback (0.040s)
+            target_dt = 0.022 if is_mem_verified else 0.040
             processing_time = time.time() - loop_start
-            sleep_time = max(0.01, 0.04 - processing_time)
+            profiler.record("total_loop", processing_time)
+            profiler.record_cycle()
+            sleep_time = max(0.004, target_dt - processing_time)
             time.sleep(sleep_time)
 
-        # 7. Match Cleanup & Learning
+        # 7. Match Cleanup & Final Reporting
         self.browser_ctrl.release_all_keys()
+        self.decision_tracer.flush_all()
+        print(profiler.format_report())
 
-        # If not yet captured, try reading DOM match results once more
         if not dom_results or not dom_results.get("available"):
             dom_results = self.observer.read_match_results()
         if (not dom_results or not dom_results.get("available")) and unified_state:
@@ -486,7 +524,6 @@ class RunManager:
                     "bosses": metrics.get("bosses")
                 }
 
-        # If ended via timeout while still running, cleanly open pause to exit
         if not exit_available and phase != "ended":
             try:
                 self.browser_ctrl.press_key("Escape")
@@ -501,7 +538,6 @@ class RunManager:
             dom_results=dom_results
         )
 
-        # Economy & coin farming tracking
         coins_earned = dom_results.get("coins") if dom_results else None
         if coins_earned is None and unified_state:
             coins_earned = unified_state.get("metrics", {}).get("coins")
@@ -514,15 +550,12 @@ class RunManager:
             policy_version=self.policy.get("version", "1.0")
         )
 
-        # Learning & adaptation
         analysis = self.learning_engine.evaluate_run(run_result)
         
-        # Synchronize active policies
         self.policy = self.learning_engine.current_policy
         self.movement_policy.update_config(self.policy)
         self.upgrade_policy.update_config(self.policy)
 
-        # Save history & metrics
         run_record = {
             "run_id": analysis.get("total_runs", run_index),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -564,13 +597,58 @@ class RunManager:
             "; ".join(analysis.get("adaptations", []))
         ])
 
-        # Print summary
         self.metrics_reporter.print_run_summary(run_result, analysis)
         print(f"[*] {self.coin_tracker.format_status_line()}")
 
-        # 8. Return to menu
         print("[*] Đang trở về Menu để chuẩn bị lượt tiếp theo...")
         self.browser_ctrl.return_to_menu()
         time.sleep(2.0)
 
         return True
+
+    def _evaluate_and_trigger_consumables(
+        self,
+        now_t: float,
+        unified_state: Dict[str, Any],
+        last_times: Dict[str, float]
+    ):
+        """
+        Condition-based tactical consumable activation:
+        Key 5: Healing Potion / Sitrus Berry (Trigger when HP < 65%)
+        Key 6: Combat Burst / Attack Orb (Trigger when Boss active or dense melee combat)
+        Key 7: Crowd Control / Speed / Pokédoll (Trigger when surrounded or mob swarm >= 6)
+        Key 8: Emergency Shield / Wall Escape / Revive (Trigger when wall-pinned or critical HP < 25%)
+        """
+        player = unified_state.get("player") or {}
+        hp_r = player.get("hp_ratio")
+        enemies = unified_state.get("enemies", [])
+        boss_active = unified_state.get("boss_info", {}).get("active", False)
+        is_encircled = unified_state.get("is_encircled", False)
+        min_dist = unified_state.get("min_enemy_dist", 9999.0)
+        close_mobs = sum(1 for e in enemies if e.get("dist", 999.0) < 160.0)
+        blocked_secs = [s for s, b in unified_state.get("sector_obstacles", {}).items() if b]
+        is_pinned = len(blocked_secs) >= 2 and min_dist < 180.0
+
+        # Key 5: Healing
+        if hp_r is not None and hp_r < 0.65:
+            if now_t - last_times["5"] >= 3.5:
+                self.browser_ctrl.press_key("5")
+                last_times["5"] = now_t
+
+        # Key 6: Combat Burst
+        if boss_active or (min_dist < 110.0 and close_mobs >= 3):
+            if now_t - last_times["6"] >= 4.0:
+                self.browser_ctrl.press_key("6")
+                last_times["6"] = now_t
+
+        # Key 7: Crowd Control / Speed
+        if is_encircled or close_mobs >= 6:
+            if now_t - last_times["7"] >= 5.0:
+                self.browser_ctrl.press_key("7")
+                last_times["7"] = now_t
+
+        # Key 8: Emergency Shield / Wall Escape
+        if is_pinned or (hp_r is not None and hp_r < 0.25):
+            if now_t - last_times["8"] >= 6.0:
+                self.browser_ctrl.press_key("8")
+                last_times["8"] = now_t

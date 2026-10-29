@@ -4,12 +4,13 @@ from typing import Dict, Any, List, Optional, Tuple
 
 class UpgradePolicy:
     """
-    PokéSurvivor Meta Upgrade & Fusion Policy:
-    Built on official community meta strategies to push past 15-20+ minutes:
-    - Rushes primary attack (Water Gun / Ember) to Level 5.
-    - Dynamically secures evolution-enabling stat cards based on 87-move evolution database.
-    - Immediately selects Golden Evolution cards.
-    - Rift Boss Reward: Bonds 2 moves together (max 4 loadout: 1 Buff + 3 Attack moves firing simultaneously).
+    PokéSurvivor Meta Upgrade & Fusion Policy (v5.0):
+    - Contextual to Active Pokémon (STAB & Element Synergy: Tapu Fini Water/Fairy vs Scorbunny Fire).
+    - Eliminates bias toward off-element moves (e.g., Flamethrower on Tapu Fini).
+    - Rushes primary starter attack to Level 5.
+    - Secures evolution-enabling stat passives based on 87-move evolution database.
+    - Selects Golden Evolution cards with highest priority.
+    - Rift Boss Reward: Bonds 2 moves together (max 4 loadout: 1 Buff + 3 Attack moves).
     - Held Item: Manages single held item slot (swapping for top-tier survival/damage items).
     - Chests: Prioritizes Rare Candy (+1 level) > Meta Upgrades > Gacha Tickets.
     - Reroll: Triggers reroll when no card reaches the viable threshold (< 500 score).
@@ -27,7 +28,6 @@ class UpgradePolicy:
         self.reset_match()
 
     def _load_evolutions_db(self) -> Dict[str, Any]:
-        """Loads verified move evolutions database extracted from PokéSurvivor client."""
         db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evolutions_db.json")
         try:
             if os.path.exists(db_path):
@@ -36,6 +36,23 @@ class UpgradePolicy:
         except Exception:
             pass
         return {}
+
+    def get_pokemon_types(self) -> List[str]:
+        """Returns elemental types for the active Pokemon."""
+        name = self.active_pokemon.lower()
+        if "fini" in name:
+            return ["water", "fairy"]
+        elif "scorbunny" in name or "raboot" in name or "cinderace" in name:
+            return ["fire"]
+        elif "sobble" in name or "drizzile" in name or "inteleon" in name or "squirtle" in name or "blastoise" in name:
+            return ["water"]
+        elif "bulbasaur" in name or "ivysaur" in name or "venusaur" in name:
+            return ["grass", "poison"]
+        elif "pikachu" in name or "raichu" in name:
+            return ["electric"]
+        elif "gastly" in name or "haunter" in name or "gengar" in name:
+            return ["ghost", "poison"]
+        return []
 
     def set_active_pokemon(self, name: str, starting_move: str = "", dex: Optional[int] = None):
         """Dynamically adapts upgrade prioritization to the active Pokemon and its starter move."""
@@ -54,12 +71,12 @@ class UpgradePolicy:
             self.acquired_moves["ember"] = 1
 
     def reset_match(self):
-        self.acquired_moves: Dict[str, int] = {}
+        self.acquired_moves = {}
         if self.rush_primary_move:
             self.acquired_moves[self.rush_primary_move] = 1
-        self.acquired_stats: List[str] = []
-        self.held_item: Optional[str] = None
-        self.bonded_groups: List[str] = []
+        self.acquired_stats = []
+        self.held_item = None
+        self.bonded_groups = []
 
     def update_config(self, policy_config: Dict[str, Any]):
         self.config = policy_config.get("upgrade", {})
@@ -75,8 +92,6 @@ class UpgradePolicy:
         self.primary_move_max_level = self.config.get("primary_move_max_level", 5)
         self.skill_ratings: Dict[str, float] = self.config.get("skill_ratings", {})
 
-        # Item Tier list from verified game mechanics (BoundlessEgret / PokeSurvivorTool)
-        # Note: Choice Band locks weapon slot and breaks multi-weapon E-cycling, so it is strictly avoided!
         self.item_scores: Dict[str, float] = {
             "shell bell": 110.0,
             "shell-bell": 110.0,
@@ -100,13 +115,9 @@ class UpgradePolicy:
             "charcoal": 20.0,
             "mystic water": 20.0,
             "life orb": 10.0,
-            "choice band": -100.0, # Breaks multi-slot firing
+            "choice band": -100.0,
             "choice-band": -100.0
         }
-        self.item_priority = [
-            "shell bell", "leftovers", "quick claw", "focus sash", "assault vest",
-            "rocky helmet", "lucky egg", "amulet coin", "choice scarf"
-        ]
 
     def choose_card(
         self,
@@ -118,31 +129,18 @@ class UpgradePolicy:
         if not choices:
             return None
 
-        # -------------------------------------------------------------
-        # 1. HELD ITEM MODAL (Option 1 = Keep, Option 2 = Switch to found)
-        # -------------------------------------------------------------
         if modal_kind == "item" or any("item" in c.get("name", "").lower() for c in choices):
             return self._choose_item(choices)
 
-        # -------------------------------------------------------------
-        # 2. BOND / MOVE COMBINATION MODAL (From Rift Boss!)
-        # -------------------------------------------------------------
         if modal_kind == "bond" or any("bond" in c.get("name", "").lower() or "bond" in c.get("tag", "").lower() for c in choices):
             return self._choose_bond(choices, current_skills)
 
-        # -------------------------------------------------------------
-        # 3. CHEST REWARD MODAL (Candy vs Tickets vs Upgrades)
-        # -------------------------------------------------------------
         if modal_kind == "chest":
             return self._choose_chest(choices)
 
-        # -------------------------------------------------------------
-        # 4. STANDARD LEVEL-UP UPGRADE CARDS
-        # -------------------------------------------------------------
         return self._choose_standard_upgrade(choices, current_hp_ratio)
 
     def _choose_item(self, choices: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Manages the 1 single item slot in PokéSurvivor based on survival tier list."""
         if len(choices) == 1:
             return choices[0]
 
@@ -151,18 +149,16 @@ class UpgradePolicy:
         new_name = switch_card.get("name", "").lower().strip()
         held_name = (self.held_item or keep_card.get("name", "")).lower().strip()
 
-        # Score function helper
         def get_item_score(item_name: str) -> float:
             clean = item_name.replace("-", " ").strip()
             for key, val in self.item_scores.items():
                 if key.replace("-", " ") in clean:
                     return val
-            return 20.0  # default baseline for unknown items
+            return 20.0
 
         new_score = get_item_score(new_name)
         held_score = get_item_score(held_name) if self.held_item else -999.0
 
-        # Choice Band must ALWAYS be dropped immediately
         if "choice band" in held_name:
             held_score = -999.0
 
@@ -177,24 +173,28 @@ class UpgradePolicy:
             return keep_card
 
     def _choose_bond(self, choices: List[Dict[str, Any]], current_skills: List[str] = None) -> Dict[str, Any]:
-        """
-        Bonds 2 moves together (max 4 groups fired simultaneously!).
-        Target loadout: 1 Buff move + 3 Attack moves.
-        """
         scored_bonds = []
+        poke_types = self.get_pokemon_types()
+        is_fire_poke = "fire" in poke_types
+        is_water_poke = "water" in poke_types
+
         for card in choices:
             name = card.get("name", "").strip().lower()
             score = 100.0
             reasons = []
 
-            # Check if this move is a buff move
             is_buff = any(b in name for b in self.buff_moves)
             is_pri_attack = any(a in name for a in self.priority_moves)
 
-            # Rule: Pair primary attack with a buff move
             if len(self.bonded_groups) == 0:
-                if is_pri_attack or "ember" in name or "fire" in name or "water" in name:
-                    score += 300.0
+                if is_water_poke and ("water" in name or "ice" in name):
+                    score += 350.0
+                    reasons.append("BOND_CORE_WATER_ATTACK")
+                elif is_fire_poke and ("fire" in name or "ember" in name):
+                    score += 350.0
+                    reasons.append("BOND_CORE_FIRE_ATTACK")
+                elif is_pri_attack:
+                    score += 280.0
                     reasons.append("BOND_CORE_ATTACK")
             elif len(self.bonded_groups) == 1 and is_buff:
                 score += 350.0
@@ -213,13 +213,6 @@ class UpgradePolicy:
         return best_card
 
     def _choose_chest(self, choices: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Selects best chest reward (Adapted from PokeSurvivorTool):
-        1. Upgrade for an owned build move (score: +900)
-        2. Rare Candy (instant level-up pick, score: +700)
-        3. General Evolution / Move Upgrade (score: +500)
-        4. Gacha Tickets (score: +150)
-        """
         scored = []
         for card in choices:
             name = card.get("name", "").lower().strip()
@@ -227,7 +220,6 @@ class UpgradePolicy:
             score = 100.0
             reason = "chest_reward"
 
-            # Check if this card upgrades an owned move
             owned_match = None
             for m in self.acquired_moves.keys():
                 if m in name or m in desc:
@@ -259,25 +251,14 @@ class UpgradePolicy:
         return best_card
 
     def _choose_standard_upgrade(self, choices: List[Dict[str, Any]], current_hp_ratio: Optional[float] = None) -> Dict[str, Any]:
-        """
-        PokéSurvivor Dynamic Starter & Evolution Meta Picker:
-        1. Golden Evolution Cards (Scald, Blizzard, Fire Blast, Overheat, Sacred Fire, Take Down) -> +2000
-        2. Emergency Sitrus Berry if HP < 50% -> +1500; Defensive heal if HP is unknown -> +650
-        3. Core Buffs: Aqua Ring (+1250 for Tapu Fini passive regen), Swords Dance, Agility
-        4. Rush Starter Move (Water Gun / Ember / detected starter) to Level 5 -> +1050
-        5. Evolution Prerequisite Stat: 'Power' (attack) for Scald/Fire Blast -> +950
-        6. Synergy Combos (Ice Beam + Power, Shadow Ball + Reflexes, Flamethrower + Reflexes)
-        7. Essential Passives: Magnet (+XP Range), Learning (+XP), Sprint (+Speed)
-        """
         scored_cards: List[Tuple[Dict[str, Any], float, str]] = []
-
-        has_power = "power" in self.acquired_stats
-        has_reflexes = "reflexes" in self.acquired_stats
-        has_synthesis = "synthesis" in self.acquired_stats
-        has_vigor = "vigor" in self.acquired_stats
 
         is_damaged = (current_hp_ratio is not None and current_hp_ratio < 0.50)
         is_unknown_hp = (current_hp_ratio is None)
+
+        poke_types = self.get_pokemon_types()
+        is_fire_poke = "fire" in poke_types
+        is_water_poke = "water" in poke_types or "fini" in self.active_pokemon.lower()
 
         for card in choices:
             score = 10.0
@@ -286,7 +267,7 @@ class UpgradePolicy:
             tag = card.get("tag", "").strip().lower()
             desc = (card.get("desc") or card.get("description") or "").strip().lower()
 
-            # 1. GOLDEN EVOLUTION CARDS (Supreme priority - clears entire screens!)
+            # 1. GOLDEN EVOLUTION CARDS
             is_evo = (
                 "evolution" in tag or "evolv" in name or "gold" in tag or "evo" in tag or "★" in name or "⭐" in name or
                 "scald" in name or "blizzard" in name or "hydro cannon" in name or
@@ -299,7 +280,7 @@ class UpgradePolicy:
                 score += 2000.0
                 reasons.append("GOLDEN_EVOLUTION_MAX_PRIORITY")
 
-            # 2. HP RECOVERY & HEALING SELECTION (HP-sensitive)
+            # 2. HP RECOVERY & HEALING SELECTION
             elif "sitrus berry" in name or "berry" in name or "heal" in desc or "recovery" in desc:
                 if is_damaged:
                     score += 1500.0
@@ -308,11 +289,10 @@ class UpgradePolicy:
                     score += 850.0
                     reasons.append("DEFENSIVE_HEAL_UNKNOWN_HP")
                 else:
-                    # When healthy (HP >= 50%), sharply demote Sitrus Berry so an upgrade is not wasted!
                     score += 10.0
                     reasons.append("preventative_heal_demoted")
 
-            # 3. CORE BUFF MOVES (Aqua Ring provides 1.6 HP/s up to 6.4 HP/s passive heal!)
+            # 3. CORE BUFF MOVES (Aqua Ring provides up to 6.4 HP/s passive heal!)
             elif "aqua ring" in name:
                 score += 1250.0
                 reasons.append("AQUA_RING_PASSIVE_REGEN_CORE_BUFF")
@@ -330,7 +310,8 @@ class UpgradePolicy:
             elif "water gun" in name:
                 wg_lvl = self.acquired_moves.get("water gun", 1)
                 if wg_lvl < 5:
-                    score += 1000.0
+                    bonus = 1050.0 if is_water_poke else 450.0
+                    score += bonus
                     reasons.append(f"RUSH_WATER_GUN_TO_LV5(cur={wg_lvl})")
                 else:
                     score += 80.0
@@ -339,19 +320,20 @@ class UpgradePolicy:
             elif "ember" in name:
                 ember_lvl = self.acquired_moves.get("ember", 1)
                 if ember_lvl < 5:
-                    score += 1000.0
-                    reasons.append(f"RUSH_PRIMARY_EMBER_TO_LV5(cur={ember_lvl})")
+                    bonus = 1050.0 if is_fire_poke else 150.0
+                    score += bonus
+                    reasons.append(f"RUSH_EMBER_TO_LV5(cur={ember_lvl})")
                 else:
                     score += 80.0
                     reasons.append("ember_already_max_lv5")
 
-            # 5. DYNAMIC EVOLUTION KEY: Check if this card is the REQUIRED PASSIVE for ANY owned move
+            # 5. DYNAMIC EVOLUTION KEY: Check if required passive for owned moves
             elif self._is_required_passive_for_owned_moves(name):
                 matched_move, req_p = self._get_required_passive_context(name)
                 score += 950.0
                 reasons.append(f"{req_p.upper()}_REQUIRED_TO_EVOLVE_{matched_move.upper()}")
 
-            # 6. PRIORITY HIGH-TIER ATTACK MOVES
+            # 6. HIGH-TIER ATTACK MOVES CONTEXTUAL TO ACTIVE POKEMON
             elif "ice beam" in name:
                 ib_lvl = self.acquired_moves.get("ice beam", 0)
                 if ib_lvl < 5:
@@ -363,7 +345,8 @@ class UpgradePolicy:
             elif "hydro pump" in name:
                 hp_lvl = self.acquired_moves.get("hydro pump", 0)
                 if hp_lvl < 5:
-                    score += 940.0
+                    bonus = 940.0 if is_water_poke else 500.0
+                    score += bonus
                     reasons.append(f"RUSH_HYDRO_PUMP_TO_LV5(cur={hp_lvl})")
                 else:
                     score += 80.0
@@ -379,8 +362,13 @@ class UpgradePolicy:
             elif "flamethrower" in name:
                 flame_lvl = self.acquired_moves.get("flamethrower", 0)
                 if flame_lvl < 5:
-                    score += 900.0
-                    reasons.append(f"RUSH_FLAMETHROWER_TO_LV5(cur={flame_lvl})")
+                    # Contextual: only rush Flamethrower if playing Fire Pokemon or already owned!
+                    if is_fire_poke or flame_lvl > 0:
+                        score += 900.0
+                        reasons.append(f"RUSH_FLAMETHROWER_TO_LV5(cur={flame_lvl})")
+                    else:
+                        score += 220.0
+                        reasons.append(f"OFF_TYPE_FLAMETHROWER_NEUTRAL(cur={flame_lvl})")
                 else:
                     score += 80.0
                     reasons.append("flamethrower_already_max_lv5")
@@ -392,7 +380,7 @@ class UpgradePolicy:
                 score += 650.0 + (c_lvl * 40.0)
                 reasons.append(f"UPGRADE_{matching_m.upper()}_TOWARD_EVOLUTION(cur={c_lvl}/5)")
 
-            # 8. DEFENSIVE ARMOR PASSIVE (Up to 12-20 cap)
+            # 8. DEFENSIVE ARMOR PASSIVE
             elif "armor" in name or "defense" in desc:
                 armor_count = self.acquired_stats.count("armor")
                 if armor_count < 12:
@@ -402,7 +390,7 @@ class UpgradePolicy:
                     score += 350.0
                     reasons.append("armor_defense_capped")
 
-            # 9. ESSENTIAL STAT PASSIVES (BoundlessEgret Meta Tier)
+            # 9. ESSENTIAL STAT PASSIVES
             elif "power" in name:
                 score += 560.0
                 reasons.append("POWER_ATTACK_DAMAGE_TIER1")
@@ -418,58 +406,26 @@ class UpgradePolicy:
             elif "synthesis" in name or "regen" in desc:
                 score += 535.0
                 reasons.append("SYNTHESIS_REGEN_TIER2")
-            elif "learning" in name or "experience" in desc:
+            elif "magnet" in name or "pickup" in desc or "range" in desc:
                 score += 530.0
-                reasons.append("LEARNING_XP_MULTIPLIER_TIER3")
-            elif "magnet" in name or "pickup" in desc:
-                score += 525.0
-                reasons.append("MAGNET_EXP_VACUUM_TIER3")
-            elif "sprint" in name or "movement speed" in desc:
-                score += 515.0
-                reasons.append("SPRINT_KITING_SPEED_TIER3")
-
-            # 10. BUFF MOVES (Swords Dance / Nasty Plot / Harden)
-            elif any(b in name for b in self.buff_moves):
-                if len(self.acquired_moves) >= 2:
-                    score += 480.0
-                    reasons.append("BUFF_MOVE_SYNERGY")
-                else:
-                    score += 80.0
-                    reasons.append("defer_buff_until_attacks_ready")
-
-            # 11. GENERAL ATTACK MOVES
-            elif any(m in name for m in self.priority_moves):
-                score += 450.0
-                reasons.append("PRIORITY_NEW_ATTACK")
+                reasons.append("MAGNET_PICKUP_RANGE_TIER2")
+            elif "learning" in name or "exp" in desc or "growth" in desc:
+                score += 520.0
+                reasons.append("LEARNING_EXP_BOOST_TIER2")
+            elif "sprint" in name or "speed" in desc:
+                score += 510.0
+                reasons.append("SPRINT_MOVE_SPEED_TIER2")
             else:
-                score += 430.0
-                reasons.append("general_card_upgrade")
-
-            # 12. LEARNED VALUE NETWORK BONUS
-            learned_r = self.skill_ratings.get(name, 0.0)
-            if learned_r > 0:
-                learned_bonus = learned_r * 40.0
-                score += learned_bonus
-                reasons.append(f"LEARNED_VALUE(+{learned_bonus:.0f})")
-
-            # 13. RARITY TIERS
-            if "legendary" in tag:
-                score += 60.0
-                reasons.append("legendary")
-            elif "epic" in tag:
-                score += 40.0
-                reasons.append("epic")
-            elif "rare" in tag:
-                score += 25.0
-                reasons.append("rare")
+                score += 150.0
+                reasons.append("baseline_upgrade")
 
             scored_cards.append((card, score, ", ".join(reasons)))
 
         scored_cards.sort(key=lambda x: x[1], reverse=True)
         best_card, best_score, best_reason = scored_cards[0]
         best_card["selection_score"] = best_score
-        best_card["selection_reason"] = best_reason or "meta_priority"
-        best_card["should_reroll"] = bool(best_score < 500.0)
+        best_card["selection_reason"] = best_reason
+        best_card["should_reroll"] = (best_score < 500.0)
 
         # Update acquired moves & stats
         card_name = best_card.get("name", "").strip().lower()
@@ -484,7 +440,7 @@ class UpgradePolicy:
 
     def _get_required_passive_context(self, card_name: str) -> Tuple[str, str]:
         """Returns (owned_move_name, required_passive_name) if card_name satisfies evolution prerequisite."""
-        c_name = card_name.lower()
+        c_name = card_name.lower().strip()
         for owned_m in self.acquired_moves.keys():
             evo_info = self.evolutions_db.get(owned_m.lower())
             if evo_info and evo_info.get("requires_passive"):
@@ -496,18 +452,15 @@ class UpgradePolicy:
     def _record_acquisition(self, card_name: str):
         """Records acquired card into acquired_moves or acquired_stats."""
         c_name = card_name.lower().strip()
-        # Clean evolution arrow if present
         if "→" in c_name:
             c_name = c_name.split("→")[-1].strip()
         elif "->" in c_name:
             c_name = c_name.split("->")[-1].strip()
 
-        # Check if known move in database
         evo_info = self.evolutions_db.get(c_name)
         is_known_move = evo_info and (evo_info.get("kind") is not None or evo_info.get("buff_stat") is not None)
         
         if is_known_move or any(p in c_name for p in self.priority_moves) or any(b in c_name for b in self.buff_moves):
-            # Key under primary move name
             matched_key = c_name
             for m in list(self.acquired_moves.keys()) + self.priority_moves:
                 if m in c_name:
@@ -515,7 +468,6 @@ class UpgradePolicy:
                     break
             self.acquired_moves[matched_key] = self.acquired_moves.get(matched_key, 1) + 1
         else:
-            # Check if stat passive
             for s in ["power", "reflexes", "focus", "sniper", "vigor", "synthesis", "learning", "magnet", "sprint", "armor"]:
                 if s in c_name:
                     self.acquired_stats.append(s)
