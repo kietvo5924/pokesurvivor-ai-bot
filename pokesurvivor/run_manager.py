@@ -251,10 +251,14 @@ class RunManager:
 
             phase_info = self.game_state_adapter.get_current_phase()
             phase = phase_info.get("phase", "none")
+            active_scr = phase_info.get("active_screen", "unknown")
             source = phase_info.get("source", "none")
 
             if phase == "running":
                 print(f"[*] Trận đấu đã bắt đầu! Sẵn sàng điều khiển. (Phát hiện qua: {source})")
+                break
+            if active_scr == "game" and phase not in ("ended", "gameover"):
+                print(f"[*] Trận đấu đã bắt đầu qua active_screen: 'game' (Phát hiện qua: {source})!")
                 break
             
             raw_data = self.game_state_adapter._fetch_browser_data()

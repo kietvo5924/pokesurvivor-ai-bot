@@ -6,6 +6,7 @@ import json
 import tempfile
 from typing import Dict, Any, List
 
+from unittest.mock import MagicMock
 from pokesurvivor.danger_estimator import (
     DIR16_ANGLES, DIR16_KEYS, DIR16_NAMES, angle_to_16_sector, DangerEstimator
 )
@@ -14,6 +15,9 @@ from pokesurvivor.upgrade_policy import UpgradePolicy
 from pokesurvivor.decision_tracer import DecisionTracer
 from pokesurvivor.trace_replayer import TraceReplayer
 from pokesurvivor.run_manager import LoopProfiler
+from pokesurvivor.game_state_adapter import GameStateAdapter
+from pokesurvivor.browser_controller import BrowserController
+from pokesurvivor.state_tracker import StateTracker
 
 class TestRound9PredictivePlanner(unittest.TestCase):
     def setUp(self):
@@ -326,6 +330,47 @@ class TestRound9PredictivePlanner(unittest.TestCase):
         self.assertEqual(p25, 175.0)
         self.assertEqual(p75, 225.0)
         self.assertEqual(max_score, 245.0)
+
+    def test_game_state_adapter_get_current_phase(self):
+        """Verifies get_current_phase() safely returns phase, active_screen, and source."""
+        adapter = GameStateAdapter(page=None)
+        # Mock _fetch_browser_data to return running game phase
+        adapter._fetch_browser_data = MagicMock(return_value={
+            "hasG": True,
+            "gState": {"gameState": "running"},
+            "dom": {"phase": "running", "activeScreen": "game", "source": "dom_observer"}
+        })
+        phase_info = adapter.get_current_phase()
+        self.assertIn("phase", phase_info)
+        self.assertIn("active_screen", phase_info)
+        self.assertIn("source", phase_info)
+        self.assertEqual(phase_info["phase"], "running")
+
+    def test_state_tracker_robust_signatures(self):
+        """Verifies StateTracker.start_run and update handle flexible argument patterns."""
+        tracker = StateTracker()
+        # Test start_run with and without run_index
+        tracker.start_run()
+        self.assertIsNone(tracker.run_id)
+        tracker.start_run(10)
+        self.assertEqual(tracker.run_id, 10)
+
+        # Test update with keyword arguments
+        tracker.update(dom_state={"phase": "running"}, unified_state={"player": {"hp_ratio": 0.8, "source": "window_G"}}, elapsed_time=12.5)
+        self.assertEqual(tracker.last_hp, 0.8)
+
+        # Test record_upgrade with card dict
+        tracker.record_upgrade({"name": "Water Gun", "tag": "Normal"}, modal_kind="level-up", verified_level=2)
+        self.assertEqual(len(tracker.upgrades_chosen), 1)
+        self.assertEqual(tracker.upgrades_chosen[0]["name"], "Water Gun")
+
+    def test_browser_controller_aliases(self):
+        """Verifies start_new_run and close aliases exist and are callable."""
+        ctrl = BrowserController()
+        self.assertTrue(hasattr(ctrl, "start_new_run"))
+        self.assertTrue(hasattr(ctrl, "close"))
+        self.assertTrue(callable(ctrl.start_new_run))
+        self.assertTrue(callable(ctrl.close))
 
 
 if __name__ == "__main__":

@@ -149,6 +149,24 @@ class GameStateAdapter:
         self.last_frame_time: float = 0.0
         self.max_frame_staleness: float = 0.85  # Cached vision entities valid up to 850ms between captures
 
+    def get_current_phase(self) -> Dict[str, Any]:
+        """Returns current game phase and source information."""
+        unified = self.read_unified_state(frame_img=None, is_moving=False)
+        ui = unified.get("ui", {})
+        return {
+            "phase": ui.get("phase", "none"),
+            "active_screen": ui.get("active_screen", "unknown"),
+            "source": ui.get("source", "adapter_ui")
+        }
+
+    def setup_canvas_telemetry(self):
+        """Injected at document start via browser_controller; safe no-op if called dynamically."""
+        if self.page:
+            try:
+                self.page.evaluate(CANVAS_HOOK_SCRIPT)
+            except Exception:
+                pass
+
     def read_unified_state(self, frame_img: Optional[Any] = None, is_moving: bool = True) -> Dict[str, Any]:
         """
         Reads, verifies, and harmonizes state from all available layers:

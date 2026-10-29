@@ -11,6 +11,7 @@ class StateTracker:
             self.active_pokemon = name
 
     def reset(self):
+        self.run_id: Optional[int] = None
         self.start_time = time.time()
         self.duration = 0.0
         self.current_level = 1
@@ -45,8 +46,7 @@ class StateTracker:
 
     def start_run(self, run_id: Optional[int] = None):
         self.reset()
-        if run_id is not None:
-            self.run_id = run_id
+        self.run_id = run_id
         self.is_active = True
         self.start_time = time.time()
 
