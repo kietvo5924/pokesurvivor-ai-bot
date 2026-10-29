@@ -397,7 +397,11 @@ class RunManager:
 
                         if not self.observe_only and not self.is_paused:
                             self.browser_ctrl.select_upgrade_choice(choice_idx)
-                            self.state_tracker.record_upgrade(choice_name, choice_idx)
+                            self.state_tracker.record_upgrade(
+                                best_card,
+                                modal_kind=modal_kind,
+                                verified_level=dom_state.get("verified_level")
+                            )
 
                         has_rerolled_this_choice = False
                         time.sleep(0.35)
@@ -405,6 +409,7 @@ class RunManager:
 
             # 5. Track state metrics & health
             self.state_tracker.update(
+                dom_state=dom_state,
                 unified_state=unified_state,
                 elapsed_time=elapsed
             )

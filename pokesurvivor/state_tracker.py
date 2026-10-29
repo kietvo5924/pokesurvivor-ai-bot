@@ -43,29 +43,42 @@ class StateTracker:
         self.trajectory_snapshots: List[Dict[str, Any]] = []
         self.last_snapshot_time = 0.0
 
-    def start_run(self):
+    def start_run(self, run_id: Optional[int] = None):
         self.reset()
+        if run_id is not None:
+            self.run_id = run_id
         self.is_active = True
         self.start_time = time.time()
 
-    def update(self, dom_state: Dict[str, Any], vision_state: Dict[str, Any]):
+    def update(
+        self,
+        dom_state: Optional[Dict[str, Any]] = None,
+        vision_state: Optional[Dict[str, Any]] = None,
+        unified_state: Optional[Dict[str, Any]] = None,
+        elapsed_time: Optional[float] = None
+    ):
         if not self.is_active:
             return
         
-        self.duration = time.time() - self.start_time
+        if elapsed_time is not None:
+            self.duration = elapsed_time
+        else:
+            self.duration = time.time() - self.start_time
         self.total_frames += 1
 
-        if vision_state.get("is_encircled", False):
+        v_state = unified_state if unified_state is not None else (vision_state if vision_state is not None else (dom_state or {}))
+
+        if v_state.get("is_encircled", False):
             self.encircled_events += 1
 
         # Verified HP tracking: only record real measurements from verified sources
-        hp = vision_state.get("hp_ratio")
-        if hp is None and isinstance(vision_state.get("player"), dict):
-            hp = vision_state["player"].get("hp_ratio")
+        hp = v_state.get("hp_ratio")
+        if hp is None and isinstance(v_state.get("player"), dict):
+            hp = v_state["player"].get("hp_ratio")
 
-        hp_status = vision_state.get("hp_status")
-        if not hp_status and isinstance(vision_state.get("player"), dict):
-            hp_status = vision_state["player"].get("source", "UNKNOWN")
+        hp_status = v_state.get("hp_status")
+        if not hp_status and isinstance(v_state.get("player"), dict):
+            hp_status = v_state["player"].get("source", "UNKNOWN")
         if not hp_status:
             hp_status = "UNKNOWN"
         self.last_hp_status = hp_status
@@ -79,11 +92,11 @@ class StateTracker:
                     "time": round(self.duration, 1),
                     "hp_drop": round(self.last_hp - hp, 2),
                     "hp_after": round(hp, 2),
-                    "min_enemy_dist": round(vision_state.get("min_enemy_dist", 999.0), 1),
-                    "is_encircled": vision_state.get("is_encircled", False),
-                    "near_wall": any(vision_state.get("sector_obstacles", {}).values()),
-                    "hazards_count": len(vision_state.get("hazards", [])),
-                    "enemies_count": vision_state.get("enemies_count", 0)
+                    "min_enemy_dist": round(v_state.get("min_enemy_dist", 999.0), 1),
+                    "is_encircled": v_state.get("is_encircled", False),
+                    "near_wall": any(v_state.get("sector_obstacles", {}).values()),
+                    "hazards_count": len(v_state.get("hazards", [])),
+                    "enemies_count": v_state.get("enemies_count", 0)
                 })
                 self.last_hp = hp
             elif self.last_hp is not None and hp > self.last_hp:
@@ -91,23 +104,23 @@ class StateTracker:
             elif self.last_hp is None:
                 self.last_hp = hp
 
-        min_e_dist = vision_state.get("min_enemy_dist", 9999.0)
+        min_e_dist = v_state.get("min_enemy_dist", 9999.0)
         if min_e_dist < self.min_distance_seen:
             self.min_distance_seen = min_e_dist
         if min_e_dist < 140.0:
             self.buffer_violations += 1
 
-        hazards = vision_state.get("hazards", [])
+        hazards = v_state.get("hazards", [])
         if hazards and (hazards[0].get("dist", 999.0) < 165.0 or hazards[0].get("is_imminent", False)):
             self.dodge_events += 1
 
-        is_stuck = vision_state.get("is_stuck", False)
+        is_stuck = v_state.get("is_stuck", False)
         if is_stuck and not self.last_stuck:
             self.stuck_events += 1
         self.last_stuck = is_stuck
 
-        self.last_danger_level = vision_state.get("danger_level", "LOW")
-        self.last_enemies_count = vision_state.get("enemies_count", 0)
+        self.last_danger_level = v_state.get("danger_level", "LOW")
+        self.last_enemies_count = v_state.get("enemies_count", 0)
 
         # Trajectory snapshot
         if self.duration - self.last_snapshot_time >= 1.5:
@@ -118,14 +131,14 @@ class StateTracker:
                 "min_dist": round(min_e_dist, 1),
                 "mobs": self.last_enemies_count,
                 "hazards": len(hazards),
-                "encircled": vision_state.get("is_encircled", False),
-                "near_wall": any(vision_state.get("sector_obstacles", {}).values())
+                "encircled": v_state.get("is_encircled", False),
+                "near_wall": any(v_state.get("sector_obstacles", {}).values())
             })
             self.last_snapshot_time = self.duration
 
     def record_upgrade(
         self,
-        upgrade: Dict[str, Any],
+        upgrade: Any,
         modal_kind: str = "level-up",
         verified_level: Optional[int] = None
     ):
@@ -136,7 +149,12 @@ class StateTracker:
         - Uses DOM verified_level if available.
         - Does NOT increment level on chest rewards, held items, or bond combinations!
         """
-        card_name = upgrade.get("name", "Unknown")
+        if isinstance(upgrade, dict):
+            card_name = upgrade.get("name", "Unknown")
+            tag = upgrade.get("tag", "")
+        else:
+            card_name = str(upgrade)
+            tag = ""
         now_time = round(self.duration, 1)
 
         if self.upgrades_chosen:
