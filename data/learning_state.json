@@ -1,20 +1,10 @@
 {
-  "total_runs": 177,
+  "total_runs": 187,
   "current_policy_version": "10.5",
   "best_policy_version": "10.5",
   "best_survival_time": 434.0,
   "best_level": 36,
   "recent_scores": [
-    2120.5,
-    715.0,
-    779.0,
-    1161.5,
-    1928.0,
-    1087.0,
-    695.5,
-    654.0,
-    947.5,
-    1032.5,
     2021.0,
     1054.0,
     2317.5,
@@ -24,110 +14,347 @@
     1555.5,
     1211.5,
     928.5,
-    444.5
+    444.5,
+    1036.0,
+    960.0,
+    730.5,
+    1128.5,
+    754.0,
+    1277.5,
+    692.5,
+    713.5,
+    1351.5,
+    1208.0
   ],
   "consecutive_drops": 0,
   "skill_ratings": {
     "flamethrower": 6.075,
     "ember": 6.759,
-    "power": 8.321,
-    "reflexes": 7.368,
-    "magnet": 6.898,
-    "revive": 12.356,
+    "power": 7.413,
+    "reflexes": 7.084,
+    "magnet": 7.644,
+    "revive": 13.102,
     "fire spin": 10.345,
-    "sitrus berry": 6.409,
-    "synthesis": 8.646,
-    "tackle": 7.758,
-    "sprint": 10.018,
+    "sitrus berry": 4.849,
+    "synthesis": 6.449,
+    "tackle": 9.039,
+    "sprint": 8.799,
     "flame wheel": 1.774,
-    "harden": 9.069,
-    "swords dance": 6.801,
+    "harden": 10.626,
+    "swords dance": 5.735,
     "heat wave": 2.891,
     "will-o-wisp": 13.68,
     "vigor": 4.623,
-    "learning": 7.187,
-    "armor": 8.498,
+    "learning": 10.925,
+    "armor": 6.728,
     "aqua ring": 16.573,
-    "water gun": 9.948,
-    "focus": 8.526,
-    "hydro pump": 11.406,
-    "agility": 8.173,
+    "water gun": 13.385,
+    "focus": 5.211,
+    "hydro pump": 12.422,
+    "agility": 4.782,
     "water gun -> water gun+": 23.348,
     "disarming voice": 6.233,
-    "fairy wind": 5.453,
-    "hyper beam": 6.139,
+    "fairy wind": 4.587,
+    "hyper beam": 5.418,
     "hydro pump -> hydro pump+": 12.326,
     "disarming voice -> disarming voice+": 7.332,
-    "bubble": 12.988,
+    "bubble": 6.887,
     "water gun → water gun+": 8.461,
     "substitute": 8.167,
-    "sniper": 5.573,
+    "sniper": 8.087,
     "hyper voice": 2.05,
     "bubble → bubble+": 9.355,
     "switch to lucky egg": 2.654,
     "hyper beam → hyper beam+": 2.09,
     "water gun+": 4.184,
-    "bubble beam": 9.793,
-    "body slam": 10.494,
+    "bubble beam": 9.001,
+    "body slam": 6.519,
     "draining kiss": 1.324
   },
   "eval_block_runs": [
     {
-      "run_id": 177,
+      "run_id": 186,
       "policy_version": "10.5",
-      "policy_hash": "f82d0008a0",
+      "policy_hash": "b34886af33",
       "pokemon": "Unknown",
-      "game_score": 49,
+      "game_score": 346,
       "game_score_source": "dom_results_kills",
-      "survival_time": 67.0,
+      "survival_time": 219.0,
       "survival_time_source": "dom_results_time",
-      "max_level": 6,
-      "max_level_source": "state_tracker_verified",
-      "fitness_score": 444.5,
+      "max_level": 19,
+      "max_level_source": "dom_results_level",
+      "fitness_score": 1351.5,
       "fitness_score_source": "internal_composite_formula",
-      "duration": 67.0,
-      "damage_events": 0,
-      "swarm_damage_count": 0,
-      "wall_damage_count": 0,
-      "hazard_damage_count": 0,
-      "encircle_rate": 0.08362676056338028,
+      "duration": 219.0,
+      "damage_events": 32,
+      "swarm_damage_count": 18,
+      "wall_damage_count": 21,
+      "hazard_damage_count": 32,
+      "encircle_rate": 0.0643160300359125,
       "last_stuck": false,
-      "end_reason": "timeout",
+      "end_reason": "defeated",
       "upgrades": [
         {
           "modal_kind": "level-up",
           "level": 2,
-          "name": "Magnet",
-          "tag": "Epic",
-          "time": 24.8
+          "name": "Learning",
+          "tag": "Common",
+          "time": 30.7
         },
         {
           "modal_kind": "level-up",
           "level": 3,
-          "name": "Focus",
+          "name": "Sniper",
           "tag": "Common",
-          "time": 32.4
+          "time": 42.0
         },
         {
           "modal_kind": "level-up",
           "level": 4,
-          "name": "Sprint",
-          "tag": "Common",
-          "time": 37.7
+          "name": "Sniper",
+          "tag": "Rare",
+          "time": 45.3
         },
         {
           "modal_kind": "level-up",
           "level": 5,
-          "name": "Sprint",
-          "tag": "Rare",
-          "time": 46.4
+          "name": "Revive",
+          "tag": "Revive",
+          "time": 50.2
         },
         {
           "modal_kind": "level-up",
           "level": 6,
-          "name": "Fairy Wind",
-          "tag": "New · Fairy",
-          "time": 69.2
+          "name": "Harden",
+          "tag": "New · Normal",
+          "time": 53.5
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 7,
+          "name": "Armor",
+          "tag": "Common",
+          "time": 55.6
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 8,
+          "name": "Water Gun",
+          "tag": "Lv.1 > 2",
+          "time": 73.0
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 9,
+          "name": "Magnet",
+          "tag": "Rare",
+          "time": 84.4
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 10,
+          "name": "Sprint",
+          "tag": "Common",
+          "time": 96.7
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 11,
+          "name": "Harden",
+          "tag": "Lv.1 > 2",
+          "time": 110.8
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 12,
+          "name": "Reflexes",
+          "tag": "Common",
+          "time": 131.4
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 13,
+          "name": "Water Gun",
+          "tag": "Lv.2 > 3",
+          "time": 153.1
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 14,
+          "name": "Focus",
+          "tag": "Rare",
+          "time": 159.9
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 15,
+          "name": "Harden",
+          "tag": "Lv.2 > 3",
+          "time": 169.7
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 16,
+          "name": "Hyper Beam",
+          "tag": "New · Normal",
+          "time": 182.8
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 17,
+          "name": "Sitrus Berry",
+          "tag": "Upgrade",
+          "time": 203.4
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 18,
+          "name": "Hyper Beam",
+          "tag": "Lv.1 > 2",
+          "time": 207.2
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 19,
+          "name": "Harden",
+          "tag": "Lv.3 > 4",
+          "time": 222.8
+        }
+      ]
+    },
+    {
+      "run_id": 187,
+      "policy_version": "10.5",
+      "policy_hash": "b34886af33",
+      "pokemon": "Unknown",
+      "game_score": 367,
+      "game_score_source": "dom_results_kills",
+      "survival_time": 193.0,
+      "survival_time_source": "dom_results_time",
+      "max_level": 17,
+      "max_level_source": "dom_results_level",
+      "fitness_score": 1208.0,
+      "fitness_score_source": "internal_composite_formula",
+      "duration": 193.0,
+      "damage_events": 25,
+      "swarm_damage_count": 16,
+      "wall_damage_count": 18,
+      "hazard_damage_count": 25,
+      "encircle_rate": 0.04094554664415365,
+      "last_stuck": false,
+      "end_reason": "defeated",
+      "upgrades": [
+        {
+          "modal_kind": "level-up",
+          "level": 2,
+          "name": "Learning",
+          "tag": "Rare",
+          "time": 30.9
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 3,
+          "name": "Water Gun",
+          "tag": "Lv.1 > 2",
+          "time": 38.3
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 4,
+          "name": "Harden",
+          "tag": "New · Normal",
+          "time": 43.7
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 5,
+          "name": "Hydro Pump",
+          "tag": "New · Water",
+          "time": 48.1
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 6,
+          "name": "Harden",
+          "tag": "Lv.1 > 2",
+          "time": 56.1
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 7,
+          "name": "Harden",
+          "tag": "Lv.2 > 3",
+          "time": 69.0
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 8,
+          "name": "Harden",
+          "tag": "Lv.3 > 4",
+          "time": 73.8
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 9,
+          "name": "Learning",
+          "tag": "Common",
+          "time": 89.8
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 10,
+          "name": "Power",
+          "tag": "Common",
+          "time": 101.6
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 11,
+          "name": "Hydro Pump",
+          "tag": "Lv.1 > 2",
+          "time": 113.8
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 12,
+          "name": "Focus",
+          "tag": "Common",
+          "time": 126.1
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 13,
+          "name": "Armor",
+          "tag": "Common",
+          "time": 140.2
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 14,
+          "name": "Armor",
+          "tag": "Common",
+          "time": 153.9
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 15,
+          "name": "Sprint",
+          "tag": "Common",
+          "time": 171.8
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 16,
+          "name": "Sniper",
+          "tag": "Common",
+          "time": 182.3
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 17,
+          "name": "Sniper",
+          "tag": "Rare",
+          "time": 207.3
         }
       ]
     }

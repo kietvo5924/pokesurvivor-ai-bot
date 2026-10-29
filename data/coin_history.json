@@ -1,6 +1,6 @@
 {
   "since": 1793192643.7488523,
-  "total_coins": 17248,
+  "total_coins": 19072,
   "runs": [
     {
       "timestamp": 1793192793.2289994,
@@ -524,6 +524,116 @@
       "kills": 49,
       "survival_time": 67.0,
       "level": 6,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793257547.9587524,
+      "date": "2026-10-29 14:05:47",
+      "coins": 144,
+      "coins_observed": true,
+      "kills": 192,
+      "survival_time": 161.0,
+      "level": 15,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793257734.0046115,
+      "date": "2026-10-29 14:08:54",
+      "coins": 182,
+      "coins_observed": true,
+      "kills": 176,
+      "survival_time": 160.0,
+      "level": 13,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793257881.5062268,
+      "date": "2026-10-29 14:11:21",
+      "coins": 131,
+      "coins_observed": true,
+      "kills": 169,
+      "survival_time": 128.0,
+      "level": 9,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793258102.0581286,
+      "date": "2026-10-29 14:15:02",
+      "coins": 205,
+      "coins_observed": true,
+      "kills": 219,
+      "survival_time": 191.0,
+      "level": 15,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793258240.1240883,
+      "date": "2026-10-29 14:17:20",
+      "coins": 93,
+      "coins_observed": true,
+      "kills": 113,
+      "survival_time": 114.0,
+      "level": 11,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793258508.0613801,
+      "date": "2026-10-29 14:21:48",
+      "coins": 230,
+      "coins_observed": true,
+      "kills": 337,
+      "survival_time": 240.0,
+      "level": 15,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793258652.3511617,
+      "date": "2026-10-29 14:24:12",
+      "coins": 115,
+      "coins_observed": true,
+      "kills": 95,
+      "survival_time": 123.0,
+      "level": 10,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793258799.3324513,
+      "date": "2026-10-29 14:26:39",
+      "coins": 213,
+      "coins_observed": true,
+      "kills": 112,
+      "survival_time": 126.0,
+      "level": 9,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793259052.1459699,
+      "date": "2026-10-29 14:30:52",
+      "coins": 276,
+      "coins_observed": true,
+      "kills": 346,
+      "survival_time": 219.0,
+      "level": 19,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793259275.5592325,
+      "date": "2026-10-29 14:34:35",
+      "coins": 235,
+      "coins_observed": true,
+      "kills": 367,
+      "survival_time": 193.0,
+      "level": 17,
       "bosses": 0,
       "policy_version": "10.5"
     }
