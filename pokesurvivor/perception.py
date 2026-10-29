@@ -45,12 +45,19 @@ class PerceptionEngine:
         # 2. EXP Gems Detection
         gems, gem_cluster_sector = self._detect_gems(hsv, center_x, center_y)
 
-        # 3. Entities & Items Detection
-        enemies, items_on_ground = self._detect_entities(hsv, center_x, center_y)
+        # 3. Purple Rift Portal & Arrow Indicator Detection
+        rift_target = self._detect_purple_rift(hsv, center_x, center_y)
 
         # 4. Confirmed Hazards & Multi-Frame Trajectory Tracking
-        raw_hazards = self._detect_hazards_and_projectiles(hsv, center_x, center_y, enemies)
+        raw_hazards = self._detect_hazards_and_projectiles(hsv, center_x, center_y)
         hazards = self._track_hazards(raw_hazards, center_x, center_y)
+
+        # 5. Entities, Items & Unknown Regions Detection (with cross-layer disambiguation)
+        enemies, items_on_ground, unknowns = self._detect_entities(
+            hsv, center_x, center_y,
+            hazards=hazards, gems=gems, rift_target=rift_target,
+            return_unknowns=True
+        )
 
         # 5. Nearest enemy & Swarm Center
         min_enemy_dist = 9999.0
@@ -98,11 +105,25 @@ class PerceptionEngine:
         # 9. Stuck / Collision Detection (strictly checked only when keys are held AND an obstacle is nearby)
         is_stuck = self._check_if_stuck(gray, center_x, center_y, is_moving, sector_obstacles)
 
-        # 10. Purple Rift Portal & Arrow Indicator Detection
-        rift_target = self._detect_purple_rift(hsv, center_x, center_y)
-
-        # 11. Boss Presence Detection (Top HP Bar + Large Boss Sprite)
+        # 10. Boss Presence Detection (Top HP Bar + Large Boss Sprite)
         boss_info = self._detect_boss(hsv, enemies, center_x, center_y)
+        if boss_info.get("active") and boss_info.get("boss_enemy"):
+            boss_e = boss_info["boss_enemy"]
+            boss_e["type"] = "boss"
+            boss_e["entity_type"] = "boss"
+            boss_e["is_boss"] = True
+            boss_e["confidence"] = 0.95
+
+        # Objects breakdown summary
+        objects_breakdown = {
+            "enemy": len(enemies),
+            "boss": 1 if (boss_info.get("active") and boss_info.get("boss_enemy")) else 0,
+            "projectile": sum(1 for h in hazards if h.get("entity_type") == "projectile"),
+            "hazard": sum(1 for h in hazards if h.get("entity_type") != "projectile"),
+            "exp": len(gems),
+            "chest": len(items_on_ground),
+            "unknown": len(unknowns)
+        }
 
         # Determine overall danger level based on distance, imminent bullets, and stuck state
         has_imminent_hazard = any(h.get("is_imminent", False) or h.get("ttc", 99.0) < 0.9 for h in hazards)
@@ -125,10 +146,13 @@ class PerceptionEngine:
             "enemies_count": len(enemies),
             "hazards_count": len(hazards),
             "gems_count": len(gems),
+            "unknowns_count": len(unknowns),
             "enemies": enemies[:25],
             "hazards": hazards[:10],
             "gems": gems[:15],
             "items_on_ground": items_on_ground[:5],
+            "unknowns": unknowns[:10],
+            "objects_breakdown": objects_breakdown,
             "sector_enemy_counts": sector_enemy_counts,
             "is_encircled": is_encircled,
             "sector_dangers": sector_dangers,
@@ -514,7 +538,21 @@ class PerceptionEngine:
                     if dist > 50.0:
                         angle = math.degrees(math.atan2(gy - cy, gx - cx))
                         sec = self._angle_to_sector(angle)
-                        gems.append({"x": gx, "y": gy, "dist": dist, "angle": angle, "sector": sec, "area": area})
+                        gx_b, gy_b, gw, gh = cv2.boundingRect(c)
+                        gem_box = (int(gx_b), int(gy_b), int(gw), int(gh))
+                        gems.append({
+                            "x": gx,
+                            "y": gy,
+                            "dist": dist,
+                            "angle": angle,
+                            "sector": sec,
+                            "area": area,
+                            "box": gem_box,
+                            "type": "exp",
+                            "entity_type": "exp",
+                            "confidence": 0.90,
+                            "source": "opencv"
+                        })
                         if dist < 320:
                             sector_gem_counts[sec] += 1
 
@@ -591,6 +629,8 @@ class PerceptionEngine:
                         continue
                     angle = math.degrees(math.atan2(hy - cy, hx - cx))
                     sec = self._angle_to_sector(angle)
+                    hz_bx, hz_by, hz_bw, hz_bh = cv2.boundingRect(c)
+                    hz_box = (int(hz_bx), int(hz_by), int(hz_bw), int(hz_bh))
                     hazards.append({
                         "x": hx,
                         "y": hy,
@@ -598,14 +638,20 @@ class PerceptionEngine:
                         "angle": angle,
                         "sector": sec,
                         "area": area,
-                        "type": "telegraph"
+                        "radius": max(8, int(round(math.sqrt(area / math.pi)))),
+                        "box": hz_box,
+                        "type": "telegraph",
+                        "entity_type": "hazard",
+                        "confidence": 0.88,
+                        "source": "opencv"
                     })
 
-        # Check Poison & Flying Projectiles (area >= 20)
+        # Check Poison & Flying Projectiles (area >= 20 and area < 350)
+        # Flying projectiles are small spit/bullets (radius 4..10px). Larger contours (>350px) are mob bodies!
         cnts_p, _ = cv2.findContours(m_poison, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for c in cnts_p:
             area = cv2.contourArea(c)
-            if 20 <= area < 800:
+            if 20 <= area < 350:
                 M = cv2.moments(c)
                 if M["m00"] > 0:
                     hx = int(M["m10"] / M["m00"])
@@ -617,6 +663,8 @@ class PerceptionEngine:
                         continue
                     angle = math.degrees(math.atan2(hy - cy, hx - cx))
                     sec = self._angle_to_sector(angle)
+                    p_bx, p_by, p_bw, p_bh = cv2.boundingRect(c)
+                    p_box = (int(p_bx), int(p_by), int(p_bw), int(p_bh))
                     hazards.append({
                         "x": hx,
                         "y": hy,
@@ -624,7 +672,12 @@ class PerceptionEngine:
                         "angle": angle,
                         "sector": sec,
                         "area": area,
-                        "type": "poison_bullet"
+                        "radius": max(5, int(round(math.sqrt(area / math.pi)))),
+                        "box": p_box,
+                        "type": "poison_bullet",
+                        "entity_type": "projectile",
+                        "confidence": 0.85,
+                        "source": "opencv"
                     })
 
         hazards.sort(key=lambda h: h["dist"])
@@ -707,21 +760,35 @@ class PerceptionEngine:
         tracked.sort(key=lambda item: (not item["is_imminent"], item["ttc"], item["dist"]))
         return tracked
 
-    def _detect_entities(self, hsv: np.ndarray, cx: int, cy: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def _detect_entities(
+        self,
+        hsv: np.ndarray,
+        cx: int,
+        cy: int,
+        hazards: Optional[List[Dict[str, Any]]] = None,
+        gems: Optional[List[Dict[str, Any]]] = None,
+        rift_target: Optional[Dict[str, Any]] = None,
+        return_unknowns: bool = False
+    ) -> Union[Tuple[List[Dict[str, Any]], List[Dict[str, Any]]], Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]]:
         """
-        Segment entities (monsters, chests, items) by background subtraction:
-        Inverts known walkable ground (grass/dirt) and static terrain obstacles.
-        Runs in ~3ms and delivers 100% detection recall across all mob types.
+        Segment entities (monsters, chests, items, unknowns) by background subtraction & morphology:
+        - Inverts known walkable ground (grass/dirt) and static terrain obstacles.
+        - Masks out player with an elliptical zone (rx=55px, ry=80px) so tall sprites
+          (Tapu Fini crest, Scorbunny ears, Gengar spikes) never self-trigger false enemy alerts.
+        - Disambiguates against known hazard telegraphs, projectiles, EXP gems, and Rift.
+        - Employs shape analysis (solidity, aspect ratio, extent) to distinguish true mobs from ambiguous
+          artifacts. Uncertain regions are classified as 'unknown' rather than presumed enemies.
         """
         h, w = hsv.shape[:2]
+        icx, icy = int(round(float(cx))), int(round(float(cy)))
 
-        # 1. Walkable ground: True Grass and Dirt path (strictly calibrated so stone cliffs are not marked as grass)
+        # 1. Walkable ground: True Grass and Dirt path
         mask_grass = cv2.inRange(hsv, np.array([52, 112, 50]), np.array([68, 220, 190]))
         mask_dirt = cv2.inRange(hsv, np.array([14, 40, 50]), np.array([32, 160, 190]))
         walkable_bg = cv2.bitwise_or(mask_grass, mask_dirt)
 
         # 2. Obstacles (Water, Cliffs, Rocks, Trees, Dark edges)
-        obstacles = self._detect_obstacle_mask(hsv)
+        obstacles = self._detect_obstacle_mask(hsv, icx, icy)
 
         # 3. Non-background is anything that isn't walkable ground or terrain
         known_environment = cv2.bitwise_or(walkable_bg, obstacles)
@@ -731,8 +798,8 @@ class PerceptionEngine:
         entities_mask[:115, :] = 0
         entities_mask[h-70:, :] = 0
 
-        # 5. Mask out player center (Scorbunny body, long ears, feet, shadow, radius 52px)
-        cv2.circle(entities_mask, (int(round(float(cx))), int(round(float(cy)))), 52, 0, -1)
+        # 5. Mask out player center with elliptical coverage (rx=55, ry=80)
+        cv2.ellipse(entities_mask, (icx, icy), (55, 80), 0, 0, 360, 0, -1)
 
         # 6. Morphological opening to clean up speckle noise
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
@@ -741,51 +808,158 @@ class PerceptionEngine:
         contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         enemies = []
         items = []
+        unknowns = []
+
+        known_hazards_list = hazards or []
+        known_gems_list = gems or []
 
         for c in contours:
             area = cv2.contourArea(c)
-            # True Pokemon sprites (Caterpie, Weedle, Pidove, Hoothoot, Wooper) have area >= 70
-            # Filters out tiny ground wildflowers, path speckles, and grass tufts (area 10-50)
-            if 70 <= area < 6500:
-                M = cv2.moments(c)
-                if M["m00"] > 0:
-                    ex = int(M["m10"] / M["m00"])
-                    ey = int(M["m01"] / M["m00"])
-                    dist = math.hypot(ex - cx, ey - cy)
-                    if dist > 60.0:
-                        angle = math.degrees(math.atan2(ey - cy, ex - cx))
-                        sec = self._angle_to_sector(angle)
+            # Filter out tiny noise (area < 65)
+            if area < 65:
+                continue
 
-                        entity_data = {
-                            "x": ex,
-                            "y": ey,
-                            "dist": dist,
-                            "angle": angle,
-                            "sector": sec,
-                            "area": area
-                        }
+            M = cv2.moments(c)
+            if M["m00"] <= 0:
+                continue
 
-                        # Check for ground items / chests (distinguishable by aspect ratio and gold/wood coloration)
-                        x, y, bw, bh = cv2.boundingRect(c)
-                        aspect = float(bw) / float(max(1, bh))
-                        is_item = False
-                        if 0.75 <= aspect <= 1.35 and 120 < area < 1000:
-                            roi_hsv = hsv[max(0, y):min(h, y+bh), max(0, x):min(w, x+bw)]
-                            if roi_hsv.size > 0:
-                                gold_mask = cv2.inRange(roi_hsv, np.array([15, 100, 100]), np.array([38, 255, 255]))
-                                gold_ratio = np.count_nonzero(gold_mask) / float(max(1, bw * bh))
-                                if gold_ratio > 0.15:
-                                    is_item = True
+            ex = int(round(M["m10"] / M["m00"]))
+            ey = int(round(M["m01"] / M["m00"]))
+            dist = math.hypot(ex - icx, ey - icy)
 
-                        if is_item:
-                            entity_data["type"] = "chest"
-                            items.append(entity_data)
-                        else:
-                            entity_data["type"] = "enemy"
-                            enemies.append(entity_data)
+            # Strict player vicinity rejection: anything within 78px is part of player character
+            if dist <= 78.0:
+                continue
+
+            x, y, bw, bh = cv2.boundingRect(c)
+            aspect = float(bw) / float(max(1, bh))
+            extent = float(area) / float(max(1, bw * bh))
+            hull = cv2.convexHull(c)
+            hull_area = cv2.contourArea(hull)
+            solidity = float(area) / float(max(1, hull_area))
+
+            angle = math.degrees(math.atan2(ey - icy, ex - icx))
+            sec = self._angle_to_sector(angle)
+
+            # Check if this contour touches the outermost screen border
+            is_border_clamped = (x <= 6 or x + bw >= w - 6 or y <= 6 or y + bh >= h - 6)
+
+            # 1. Filter out static border terrain (large cliffs/trees along map edges)
+            if is_border_clamped and (area > 2000 or aspect > 2.5 or aspect < 0.35 or solidity < 0.38):
+                continue
+
+            # 2. Check cross-layer disambiguation with known Hazards
+            is_hazard_match = False
+            for hz in known_hazards_list:
+                hz_x = float(hz.get("x", 0.0))
+                hz_y = float(hz.get("y", 0.0))
+                hz_r = float(hz.get("radius", hz.get("r", 20.0)))
+                if math.hypot(ex - hz_x, ey - hz_y) < max(28.0, hz_r * 0.8):
+                    is_hazard_match = True
+                    break
+            if is_hazard_match:
+                continue
+
+            # 3. Check cross-layer disambiguation with known EXP Gems
+            is_gem_match = False
+            for gm in known_gems_list:
+                gx = float(gm.get("x", 0.0))
+                gy = float(gm.get("y", 0.0))
+                if math.hypot(ex - gx, ey - gy) < 22.0:
+                    is_gem_match = True
+                    break
+            if is_gem_match:
+                continue
+
+            # 4. Check cross-layer disambiguation with Purple Rift
+            if rift_target:
+                rx = float(rift_target.get("x", 0.0))
+                ry = float(rift_target.get("y", 0.0))
+                if math.hypot(ex - rx, ey - ry) < 55.0:
+                    continue
+
+            box_tuple = (int(x), int(y), int(bw), int(bh))
+
+            # 5. Check for Chest / Ground items
+            is_item = False
+            if 0.70 <= aspect <= 1.45 and 100 < area < 1200 and extent > 0.45:
+                roi_hsv = hsv[max(0, y):min(h, y+bh), max(0, x):min(w, x+bw)]
+                if roi_hsv.size > 0:
+                    gold_mask = cv2.inRange(roi_hsv, np.array([15, 90, 90]), np.array([38, 255, 255]))
+                    gold_ratio = np.count_nonzero(gold_mask) / float(max(1, bw * bh))
+                    if gold_ratio > 0.12:
+                        is_item = True
+
+            if is_item:
+                items.append({
+                    "x": ex,
+                    "y": ey,
+                    "dist": dist,
+                    "angle": angle,
+                    "sector": sec,
+                    "area": area,
+                    "type": "chest",
+                    "entity_type": "chest",
+                    "box": box_tuple,
+                    "confidence": round(float(np.clip(0.70 + gold_ratio, 0.70, 0.95)), 2),
+                    "source": "opencv"
+                })
+                continue
+
+            # 6. Evaluate morphological fitness for genuine enemy Pokémon
+            is_valid_mob = (
+                (80 <= area <= 4500) and
+                (0.40 <= aspect <= 2.3) and
+                (solidity >= 0.38) and
+                (extent >= 0.25)
+            )
+
+            if is_valid_mob:
+                shape_score = (solidity * 0.4) + (extent * 0.3) + (1.0 - min(1.0, abs(aspect - 1.0) / 1.5)) * 0.3
+                conf = round(float(np.clip(0.58 + shape_score * 0.38, 0.65, 0.95)), 2)
+                enemies.append({
+                    "x": ex,
+                    "y": ey,
+                    "dist": dist,
+                    "angle": angle,
+                    "sector": sec,
+                    "area": area,
+                    "type": "enemy",
+                    "entity_type": "enemy",
+                    "box": box_tuple,
+                    "confidence": conf,
+                    "solidity": round(solidity, 2),
+                    "aspect": round(aspect, 2),
+                    "source": "opencv"
+                })
+            else:
+                # Ambiguous / uncertain region: DO NOT assume enemy!
+                reason = "irregular_solidity" if solidity < 0.38 else (
+                    "extreme_aspect" if (aspect > 2.3 or aspect < 0.40) else "irregular_extent"
+                )
+                unknowns.append({
+                    "x": ex,
+                    "y": ey,
+                    "dist": dist,
+                    "angle": angle,
+                    "sector": sec,
+                    "area": area,
+                    "type": "unknown",
+                    "entity_type": "unknown",
+                    "box": box_tuple,
+                    "confidence": round(float(np.clip(solidity * 0.3 + extent * 0.2, 0.15, 0.48)), 2),
+                    "reason": reason,
+                    "source": "opencv"
+                })
 
         enemies.sort(key=lambda e: e["dist"])
         items.sort(key=lambda i: i["dist"])
+        unknowns.sort(key=lambda u: u["dist"])
+
+        self.last_unknowns = unknowns
+
+        if return_unknowns:
+            return enemies, items, unknowns
         return enemies, items
 
     def _compute_sector_dangers(
@@ -1039,7 +1213,47 @@ class PerceptionEngine:
             except Exception:
                 pass
 
-        # 3. Enemies with Distance Tags
+        # Helper for bounding boxes and classification badges
+        def draw_entity_badge(box, label, color, conf=None, src=None, is_dashed=False):
+            bx, by, bw, bh = [int(round(float(v))) for v in box]
+            if not (-60 <= bx <= w + 60 and -60 <= by <= h + 60):
+                return
+            bx_c = max(0, min(w - 1, bx))
+            by_c = max(0, min(h - 1, by))
+            bw_c = max(1, min(w - bx_c, bw))
+            bh_c = max(1, min(h - by_c, bh))
+
+            if is_dashed:
+                dash_len = max(4, min(10, min(bw_c, bh_c) // 3))
+                cv2.line(overlay, (bx_c, by_c), (bx_c + dash_len, by_c), color, 1)
+                cv2.line(overlay, (bx_c, by_c), (bx_c, by_c + dash_len), color, 1)
+                cv2.line(overlay, (bx_c + bw_c, by_c), (bx_c + bw_c - dash_len, by_c), color, 1)
+                cv2.line(overlay, (bx_c + bw_c, by_c), (bx_c + bw_c, by_c + dash_len), color, 1)
+                cv2.line(overlay, (bx_c, by_c + bh_c), (bx_c + dash_len, by_c + bh_c), color, 1)
+                cv2.line(overlay, (bx_c, by_c + bh_c), (bx_c, by_c + bh_c - dash_len), color, 1)
+                cv2.line(overlay, (bx_c + bw_c, by_c + bh_c), (bx_c + bw_c - dash_len, by_c + bh_c), color, 1)
+                cv2.line(overlay, (bx_c + bw_c, by_c + bh_c), (bx_c + bw_c, by_c + bh_c - dash_len), color, 1)
+            else:
+                cv2.rectangle(overlay, (bx_c, by_c), (bx_c + bw_c, by_c + bh_c), color, 2)
+
+            tag = f"[{label}]"
+            if conf is not None:
+                tag += f" {int(round(float(conf)*100))}%"
+            if src:
+                src_short = "G" if "window_G" in src or src == "G" else "CV"
+                tag += f" [{src_short}]"
+
+            tag_y = max(12, by_c - 4)
+            tag_x = max(2, bx_c)
+            text_size = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
+            pill_y1 = max(0, tag_y - text_size[1] - 3)
+            pill_y2 = min(h, tag_y + 3)
+            pill_x2 = min(w, tag_x + text_size[0] + 4)
+            cv2.rectangle(overlay, (tag_x - 2, pill_y1), (pill_x2, pill_y2), (20, 20, 20), -1)
+            cv2.rectangle(overlay, (tag_x - 2, pill_y1), (pill_x2, pill_y2), color, 1)
+            cv2.putText(overlay, tag, (tag_x, tag_y), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA)
+
+        # 3. Enemies & Bosses with Bounding Boxes, Confidence and Source Badges
         for e in vision_state.get("enemies", [])[:18]:
             ex_val = e.get("screen_x") if e.get("screen_x") is not None else e.get("x")
             ey_val = e.get("screen_y") if e.get("screen_y") is not None else e.get("y")
@@ -1052,13 +1266,32 @@ class PerceptionEngine:
                 continue
             if not (-50 <= ex <= w + 50 and -50 <= ey <= h + 50):
                 continue
-            edist = float(e.get("dist", 0.0))
-            cv2.circle(overlay, (ex, ey), 16, (0, 140, 255), 2)
-            if edist < 220:
-                cv2.putText(overlay, f"{edist:.0f}px", (int(ex - 16), int(ey - 18)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 140, 255), 1, cv2.LINE_AA)
 
-        # 4. Hazards & Bullets with Trajectory Arrows and TTC
+            box = e.get("box") or (ex - 16, ey - 16, 32, 32)
+            is_b = bool(e.get("is_boss", False) or e.get("type") == "boss")
+            is_th = bool(e.get("is_thief", False) or e.get("type") == "thief")
+            src = e.get("source", "CV")
+            conf = e.get("confidence", 0.85)
+
+            if is_b:
+                label = "BOSS"
+                col = (0, 0, 255)
+                draw_entity_badge(box, label, col, conf=conf, src=src)
+                cv2.circle(overlay, (ex, ey), 22, col, 2)
+            elif is_th:
+                label = "THIEF"
+                col = (0, 215, 255)
+                draw_entity_badge(box, label, col, conf=conf, src=src)
+            elif e.get("dex"):
+                label = f"#{e['dex']}"
+                col = (0, 140, 255)
+                draw_entity_badge(box, label, col, conf=conf, src=src)
+            else:
+                label = "ENEMY"
+                col = (0, 140, 255)
+                draw_entity_badge(box, label, col, conf=conf, src=src)
+
+        # 4. Hazards & Bullets with Bounding Boxes, Trajectory Vectors, and Badges
         for hz in vision_state.get("hazards", []):
             hx_val = hz.get("screen_x") if hz.get("screen_x") is not None else hz.get("x")
             hy_val = hz.get("screen_y") if hz.get("screen_y") is not None else hz.get("y")
@@ -1071,24 +1304,66 @@ class PerceptionEngine:
                 continue
             if not (-50 <= hx <= w + 50 and -50 <= hy <= h + 50):
                 continue
-            vx = float(hz.get("vx", 0.0))
-            vy = float(hz.get("vy", 0.0))
+
+            box = hz.get("box") or (hx - 14, hy - 14, 28, 28)
+            is_proj = (hz.get("entity_type") == "projectile" or "bullet" in str(hz.get("type", "")))
+            src = hz.get("source", "CV")
+            conf = hz.get("confidence", 0.88)
             ttc = float(hz.get("ttc", 99.0))
             is_imm = bool(hz.get("is_imminent", False))
-            hz_color = (0, 0, 255) if is_imm else (255, 0, 255)
-            cv2.circle(overlay, (hx, hy), 14, hz_color, 2)
-            if is_imm:
-                cv2.circle(overlay, (hx, hy), 22, (0, 0, 255), 1)
 
-            # Arrow indicating hazard movement velocity
+            if is_proj:
+                col = (0, 255, 255)
+                draw_entity_badge(box, "PROJ", col, conf=conf, src=src)
+            else:
+                col = (0, 0, 255) if is_imm else (255, 0, 255)
+                lbl = f"HAZARD {ttc:.1f}s" if ttc < 5.0 else "HAZARD"
+                draw_entity_badge(box, lbl, col, conf=conf, src=src)
+
+            vx = float(hz.get("vx", 0.0))
+            vy = float(hz.get("vy", 0.0))
             if abs(vx) > 5 or abs(vy) > 5:
                 cv2.arrowedLine(overlay, (hx, hy), (int(round(hx + vx * 0.35)), int(round(hy + vy * 0.35))),
-                                hz_color, 2, tipLength=0.3)
-            if ttc < 5.0:
-                cv2.putText(overlay, f"TTC:{ttc:.1f}s", (int(hx - 22), int(hy - 16)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, hz_color, 1, cv2.LINE_AA)
+                                col, 2, tipLength=0.3)
 
-        # 5. Chosen Movement Direction Arrow
+        # 5. EXP Gems Bounding Badges
+        gems_list = vision_state.get("gems")
+        if gems_list is None:
+            gems_list = [it for it in vision_state.get("items", []) if it.get("entity_type") == "exp" or it.get("kind") in ("xp", "gem", "exp")]
+        for g in gems_list[:12]:
+            gx = int(round(float(g.get("screen_x", g.get("x", 0.0)))))
+            gy = int(round(float(g.get("screen_y", g.get("y", 0.0)))))
+            box = g.get("box") or (gx - 5, gy - 5, 10, 10)
+            draw_entity_badge(box, "EXP", (255, 255, 0), conf=g.get("confidence", 0.90), src=g.get("source", "CV"))
+
+        # 6. Items / Chests Badges
+        items_list = vision_state.get("items_on_ground")
+        if items_list is None:
+            items_list = [it for it in vision_state.get("items", []) if it.get("entity_type") != "exp" and it.get("kind") not in ("xp", "gem", "exp")]
+        for it in items_list[:5]:
+            ix = int(round(float(it.get("screen_x", it.get("x", 0.0)))))
+            iy = int(round(float(it.get("screen_y", it.get("y", 0.0)))))
+            box = it.get("box") or (ix - 12, iy - 12, 24, 24)
+            k_type = str(it.get("type", it.get("kind", "item"))).upper()
+            draw_entity_badge(box, k_type, (0, 215, 255), conf=it.get("confidence", 0.85), src=it.get("source", "CV"))
+
+        # 7. Purple Rift Badge
+        rift_obj = vision_state.get("rift_target")
+        if rift_obj:
+            rx = int(round(float(rift_obj.get("screen_x", rift_obj.get("x", 0.0)))))
+            ry = int(round(float(rift_obj.get("screen_y", rift_obj.get("y", 0.0)))))
+            box = rift_obj.get("box") or (rx - 25, ry - 25, 50, 50)
+            draw_entity_badge(box, "RIFT", (200, 50, 180), conf=rift_obj.get("confidence", 0.95), src=rift_obj.get("source", "CV"))
+
+        # 8. Ambiguous / Unknown Objects (Dashed Gray Boxes)
+        for u in vision_state.get("unknowns", [])[:6]:
+            ux = int(round(float(u.get("screen_x", u.get("x", 0.0)))))
+            uy = int(round(float(u.get("screen_y", u.get("y", 0.0)))))
+            box = u.get("box") or (ux - 14, uy - 14, 28, 28)
+            reason_tag = u.get("reason", "unknown")[:8]
+            draw_entity_badge(box, f"? {reason_tag}", (180, 180, 180), conf=u.get("confidence", 0.35), src="CV", is_dashed=True)
+
+        # 9. Chosen Movement Direction Arrow
         if chosen_dir:
             dir_angles = {
                 "E": 0, "SE": 45, "S": 90, "SW": 135,
@@ -1103,24 +1378,33 @@ class PerceptionEngine:
             cv2.putText(overlay, f"MOVE: {chosen_dir}", (int(ax + 10), int(ay + 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
 
-        # 6. Telemetry HUD Dashboard Overlay
+        # 10. Telemetry HUD Dashboard Overlay
         hp_r = vision_state.get("hp_ratio")
         hp_display = f"{hp_r*100:.0f}%" if hp_r is not None else "UNKNOWN"
+
+        e_cnt = len(vision_state.get("enemies", []))
+        b_cnt = sum(1 for e in vision_state.get("enemies", []) if e.get("is_boss"))
+        p_cnt = sum(1 for h in vision_state.get("hazards", []) if h.get("entity_type") == "projectile")
+        h_cnt = sum(1 for h in vision_state.get("hazards", []) if h.get("entity_type") != "projectile")
+        x_cnt = len(vision_state.get("gems", []))
+        u_cnt = len(vision_state.get("unknowns", []))
+        g_cnt = sum(1 for e in vision_state.get("enemies", []) if e.get("source") == "window_G")
+        cv_cnt = sum(1 for e in vision_state.get("enemies", []) if "opencv" in str(e.get("source", "")))
+
         status_lines = [
             f"PARTNER : {getattr(self, 'active_pokemon', 'Unknown')}",
-            f"DANGER  : {vision_state.get('danger_level', 'LOW')}",
+            f"DANGER  : {vision_state.get('danger_level', 'LOW')} | CONF: {vision_state.get('confidence', 0.85)*100:.0f}%",
             f"HP      : {hp_display} ({vision_state.get('hp_status', 'UNKNOWN')})",
-            f"ENEMIES : {vision_state.get('enemies_count', len(vision_state.get('enemies', [])))} | HAZARDS: {vision_state.get('hazards_count', len(vision_state.get('hazards', [])))}",
-            f"ENCIRCLE: {vision_state.get('is_encircled', False)} | STUCK: {vision_state.get('is_stuck', False)}",
-            f"CONFID. : {vision_state.get('confidence', 0.85)*100:.0f}%"
+            f"OBJECTS : E:{e_cnt} B:{b_cnt} P:{p_cnt} H:{h_cnt} X:{x_cnt} ?:{u_cnt}",
+            f"SOURCES : G:{g_cnt} CV:{cv_cnt} | ENC:{vision_state.get('is_encircled', False)} STK:{vision_state.get('is_stuck', False)}"
         ]
 
         box_top = max(0, int(round(h - 145)))
-        cv2.rectangle(overlay, (10, box_top), (340, int(round(h - 10))), (0, 0, 0), -1)
-        cv2.rectangle(overlay, (10, box_top), (340, int(round(h - 10))), (0, 255, 255), 1)
+        cv2.rectangle(overlay, (10, box_top), (370, int(round(h - 10))), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (10, box_top), (370, int(round(h - 10))), (0, 255, 255), 1)
         for i, line in enumerate(status_lines):
-            cv2.putText(overlay, line, (18, int(round(box_top + 20 + i * 20))),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(overlay, line, (18, int(round(box_top + 20 + i * 22))),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (255, 255, 255), 1, cv2.LINE_AA)
 
         try:
             import os

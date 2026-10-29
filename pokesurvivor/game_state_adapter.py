@@ -207,6 +207,8 @@ class GameStateAdapter:
             "items": entities["items"],
             "specials": entities["specials"],
             "terrain": entities["terrain"],
+            "unknowns": entities.get("unknowns", []),
+            "objects_breakdown": entities.get("objects_breakdown", {}),
             "ui": ui,
             "metrics": metrics,
             "danger_level": entities.get("danger_level", "LOW"),
@@ -845,6 +847,11 @@ class GameStateAdapter:
                     dist = math.hypot(dx, dy)
                     deg = math.degrees(math.atan2(dy, dx)) % 360
                     sector = self._angle_to_sector(deg)
+                    r = float(e.get("r", 16))
+                    is_boss = bool(e.get("boss", False))
+                    is_thief = bool(e.get("behavior") == "thief" or e.get("dex") in [1000, 52])
+                    entity_type = "boss" if is_boss else ("thief" if is_thief else "enemy")
+                    box = (int(round(e_sx - r)), int(round(e_sy - r)), int(round(2 * r)), int(round(2 * r))) if (e_sx is not None and e_sy is not None) else None
                     if sector in sector_enemy_counts:
                         sector_enemy_counts[sector] += 1
                     if dist < min_enemy_dist:
@@ -862,17 +869,85 @@ class GameStateAdapter:
                         "world_y": e_wy,
                         "screen_x": e_sx,
                         "screen_y": e_sy,
+                        "box": box,
                         "dist": dist,
                         "sector": sector,
-                        "radius": e.get("r", 16),
+                        "radius": r,
                         "type": e.get("dex"),
                         "dex": e.get("dex"),
-                        "is_boss": e.get("boss", False),
-                        "is_shiny": e.get("shiny", False),
-                        "is_thief": e.get("behavior") == "thief" or e.get("dex") in [1000, 52],
+                        "entity_type": entity_type,
+                        "is_boss": is_boss,
+                        "is_shiny": bool(e.get("shiny", False)),
+                        "is_thief": is_thief,
                         "hp": e.get("hp"),
+                        "confidence": 1.0,
                         "source": "window_G"
                     })
+
+                # Deduplicate and supplement with OpenCV detections if available
+                if cv_vision and cv_vision.get("enemies"):
+                    for cv_e in cv_vision["enemies"]:
+                        cv_sx = float(cv_e.get("x", 640.0))
+                        cv_sy = float(cv_e.get("y", 360.0))
+                        if cam_valid and has_player_world:
+                            cv_wx = px + (cv_sx - 640.0) / s
+                            cv_wy = py + (cv_sy - 360.0) / s
+                        else:
+                            cv_wx, cv_wy = None, None
+
+                        # Spatial matching against window.G enemies (threshold: 45px)
+                        matched = False
+                        for g_e in enemies:
+                            if g_e.get("screen_x") is not None and g_e.get("screen_y") is not None:
+                                s_dist = math.hypot(cv_sx - g_e["screen_x"], cv_sy - g_e["screen_y"])
+                                if s_dist <= 45.0:
+                                    matched = True
+                                    if cv_e.get("box"):
+                                        g_e["box"] = cv_e["box"]
+                                    break
+                            elif cv_wx is not None and g_e.get("world_x") is not None:
+                                w_dist = math.hypot(cv_wx - g_e["world_x"], cv_wy - g_e["world_y"])
+                                if w_dist <= 45.0:
+                                    matched = True
+                                    break
+
+                        # If not matched, it's a genuine supplementary OpenCV detection
+                        if not matched:
+                            if cam_valid and has_player_world:
+                                dx = cv_wx - px
+                                dy = cv_wy - py
+                            else:
+                                dx = cv_sx - 640.0
+                                dy = cv_sy - 360.0
+                            dist = math.hypot(dx, dy)
+                            deg = math.degrees(math.atan2(dy, dx)) % 360
+                            sector = self._angle_to_sector(deg)
+                            if sector in sector_enemy_counts:
+                                sector_enemy_counts[sector] += 1
+                            if dist < min_enemy_dist:
+                                min_enemy_dist = dist
+                                nearest_enemy_sec = sector
+                            if dist < 340.0:
+                                swarm_x += (cv_wx if cv_wx is not None else cv_sx)
+                                swarm_y += (cv_wy if cv_wy is not None else cv_sy)
+                                swarm_count += 1
+
+                            enemies.append({
+                                **cv_e,
+                                "x": cv_wx if cv_wx is not None else cv_sx,
+                                "y": cv_wy if cv_wy is not None else cv_sy,
+                                "world_x": cv_wx,
+                                "world_y": cv_wy,
+                                "screen_x": cv_sx,
+                                "screen_y": cv_sy,
+                                "dist": dist,
+                                "sector": sector,
+                                "entity_type": cv_e.get("entity_type", "enemy"),
+                                "confidence": cv_e.get("confidence", 0.75),
+                                "source": "opencv_supplement"
+                            })
+                            enemy_source = "window_G_merged"
+
             elif cv_vision and cv_vision.get("enemies"):
                 # window.G list is empty, but OpenCV observes real enemies!
                 # Do NOT treat empty window.G as evidence of no danger!
@@ -912,6 +987,8 @@ class GameStateAdapter:
                         "screen_y": ys,
                         "dist": dist,
                         "sector": sector,
+                        "entity_type": e.get("entity_type", "enemy"),
+                        "confidence": e.get("confidence", 0.75),
                         "source": "opencv_perception_fallback"
                     })
             else:
@@ -992,20 +1069,27 @@ class GameStateAdapter:
                     z_dist = math.hypot(zx - px, zy - py)
                     z_deg = math.degrees(math.atan2(zy - py, zx - px)) % 360
                     z_sec = self._angle_to_sector(z_deg)
+                    zx_s = s * zx + e_cam if cam_valid else None
+                    zy_s = s * zy + f_cam if cam_valid else None
+                    zr = float(z.get("r", 20))
+                    z_box = (int(round(zx_s - zr)), int(round(zy_s - zr)), int(round(2 * zr)), int(round(2 * zr))) if (zx_s is not None and zy_s is not None) else None
                     hazards.append({
                         "kind": z.get("kind"),
                         "type": "telegraph",
+                        "entity_type": "hazard",
                         "x": zx,
                         "y": zy,
                         "world_x": zx,
                         "world_y": zy,
-                        "screen_x": s * zx + e_cam if cam_valid else None,
-                        "screen_y": s * zy + f_cam if cam_valid else None,
+                        "screen_x": zx_s,
+                        "screen_y": zy_s,
+                        "box": z_box,
                         "dist": z_dist,
                         "sector": z_sec,
-                        "radius": z.get("r", 20),
+                        "radius": zr,
                         "angle": z.get("angle", 0.0),
                         "is_imminent": z_dist < 110.0,
+                        "confidence": 1.0,
                         "source": "window_G"
                     })
                 for p in g_projs:
@@ -1033,15 +1117,21 @@ class GameStateAdapter:
                             dca = math.hypot(rel_x, rel_y)
                             if ttc < 1.2 and dca < 55.0:
                                 is_imminent = True
+                    px_s = s * px_b + e_cam if cam_valid else None
+                    py_s = s * py_b + f_cam if cam_valid else None
+                    pr = float(p.get("r", 8))
+                    p_box = (int(round(px_s - pr)), int(round(py_s - pr)), int(round(2 * pr)), int(round(2 * pr))) if (px_s is not None and py_s is not None) else None
                     hazards.append({
                         "kind": "shot",
                         "type": "bullet",
+                        "entity_type": "projectile",
                         "x": px_b,
                         "y": py_b,
                         "world_x": px_b,
                         "world_y": py_b,
-                        "screen_x": s * px_b + e_cam if cam_valid else None,
-                        "screen_y": s * py_b + f_cam if cam_valid else None,
+                        "screen_x": px_s,
+                        "screen_y": py_s,
+                        "box": p_box,
                         "dist": p_dist,
                         "sector": p_sec,
                         "vx": vx,
@@ -1049,8 +1139,51 @@ class GameStateAdapter:
                         "ttc": ttc,
                         "dca": dca,
                         "is_imminent": is_imminent,
+                        "confidence": 1.0,
                         "source": "window_G"
                     })
+
+                # Deduplicate with OpenCV hazards
+                if cv_vision and cv_vision.get("hazards"):
+                    for cv_h in cv_vision["hazards"]:
+                        hs_x = float(cv_h.get("x", 640.0))
+                        hs_y = float(cv_h.get("y", 360.0))
+                        matched = False
+                        for gh in hazards:
+                            if gh.get("screen_x") is not None and gh.get("screen_y") is not None:
+                                if math.hypot(hs_x - gh["screen_x"], hs_y - gh["screen_y"]) <= 45.0:
+                                    matched = True
+                                    if cv_h.get("box"):
+                                        gh["box"] = cv_h["box"]
+                                    break
+                        if not matched:
+                            if cam_valid and has_player_world:
+                                wx = px + (hs_x - 640.0) / s
+                                wy = py + (hs_y - 360.0) / s
+                                dx = wx - px
+                                dy = wy - py
+                            else:
+                                wx, wy = None, None
+                                dx = hs_x - 640.0
+                                dy = hs_y - 360.0
+                            dist = math.hypot(dx, dy)
+                            deg = math.degrees(math.atan2(dy, dx)) % 360
+                            haz_entry = {
+                                **cv_h,
+                                "x": wx if wx is not None else hs_x,
+                                "y": wy if wy is not None else hs_y,
+                                "world_x": wx,
+                                "world_y": wy,
+                                "screen_x": hs_x,
+                                "screen_y": hs_y,
+                                "dist": dist,
+                                "sector": self._angle_to_sector(deg),
+                                "confidence": cv_h.get("confidence", 0.80),
+                                "source": "opencv_supplement"
+                            }
+                            hazards.append(haz_entry)
+                            hazard_source = "window_G_merged"
+
             elif cv_vision and cv_vision.get("hazards"):
                 hazard_source = "opencv_hazards_fallback"
                 for h in cv_vision["hazards"]:
@@ -1096,17 +1229,65 @@ class GameStateAdapter:
                 for it in g_pickups:
                     ix = float(it.get("x", 0.0))
                     iy = float(it.get("y", 0.0))
+                    ix_s = s * ix + e_cam if cam_valid else None
+                    iy_s = s * iy + f_cam if cam_valid else None
+                    it_box = (int(round(ix_s - 10)), int(round(iy_s - 10)), 20, 20) if (ix_s is not None and iy_s is not None) else None
                     items.append({
                         "x": ix,
                         "y": iy,
                         "world_x": ix,
                         "world_y": iy,
-                        "screen_x": s * ix + e_cam if cam_valid else None,
-                        "screen_y": s * iy + f_cam if cam_valid else None,
+                        "screen_x": ix_s,
+                        "screen_y": iy_s,
+                        "box": it_box,
                         "dist": math.hypot(ix - px, iy - py),
                         "kind": it.get("kind", "xp"),
+                        "entity_type": "exp" if it.get("kind") in ("xp", "gem", "exp") else "item",
+                        "confidence": 1.0,
                         "source": "window_G"
                     })
+
+                # Deduplicate with OpenCV items / gems
+                if cv_vision and (cv_vision.get("gems") or cv_vision.get("items_on_ground")):
+                    raw_cv_items = list(cv_vision.get("gems", [])) + list(cv_vision.get("items_on_ground", []))
+                    for cv_it in raw_cv_items:
+                        is_x = float(cv_it.get("x", 640.0))
+                        is_y = float(cv_it.get("y", 360.0))
+                        matched = False
+                        for gi in items:
+                            if gi.get("screen_x") is not None and gi.get("screen_y") is not None:
+                                if math.hypot(is_x - gi["screen_x"], is_y - gi["screen_y"]) <= 45.0:
+                                    matched = True
+                                    if cv_it.get("box"):
+                                        gi["box"] = cv_it["box"]
+                                    break
+                        if not matched:
+                            if cam_valid and has_player_world:
+                                wx = px + (is_x - 640.0) / s
+                                wy = py + (is_y - 360.0) / s
+                                dx = wx - px
+                                dy = wy - py
+                            else:
+                                wx, wy = None, None
+                                dx = is_x - 640.0
+                                dy = is_y - 360.0
+                            dist = math.hypot(dx, dy)
+                            deg = math.degrees(math.atan2(dy, dx)) % 360
+                            items.append({
+                                **cv_it,
+                                "x": wx if wx is not None else is_x,
+                                "y": wy if wy is not None else is_y,
+                                "world_x": wx,
+                                "world_y": wy,
+                                "screen_x": is_x,
+                                "screen_y": is_y,
+                                "dist": dist,
+                                "sector": self._angle_to_sector(deg),
+                                "confidence": cv_it.get("confidence", 0.85),
+                                "source": "opencv_supplement"
+                            })
+                            item_source = "window_G_merged"
+
             elif cv_vision and (cv_vision.get("gems") or cv_vision.get("items_on_ground")):
                 item_source = "opencv_items_fallback"
                 raw_items = list(cv_vision.get("gems", [])) + list(cv_vision.get("items_on_ground", []))
@@ -1260,6 +1441,17 @@ class GameStateAdapter:
                     "sector_obs_costs": sector_obs_costs,
                     "source": terrain_source,
                     "status": terrain_status
+                },
+                "unknowns": cv_vision.get("unknowns", []) if cv_vision else [],
+                "objects_breakdown": {
+                    "enemy": len(enemies),
+                    "boss": sum(1 for e in enemies if e.get("is_boss")),
+                    "projectile": sum(1 for h in hazards if h.get("entity_type") == "projectile" or h.get("type") in ("bullet", "shot")),
+                    "hazard": sum(1 for h in hazards if h.get("entity_type") != "projectile" and h.get("type") not in ("bullet", "shot")),
+                    "exp": sum(1 for it in items if it.get("entity_type") in ("exp", "gem", "xp") or it.get("kind") in ("exp", "gem", "xp")),
+                    "chest": 1 if specials.get("chest") else 0,
+                    "rift": 1 if specials.get("rift") else 0,
+                    "unknown": len(cv_vision.get("unknowns", [])) if cv_vision else 0
                 },
                 "sector_dangers": sector_dangers,
                 "sector_enemy_counts": sector_enemy_counts,
@@ -1458,6 +1650,8 @@ class GameStateAdapter:
                     "source": terrain_source,
                     "status": terrain_status
                 },
+                "unknowns": vision.get("unknowns", []),
+                "objects_breakdown": vision.get("objects_breakdown", {}),
                 "sector_dangers": vision.get("sector_dangers", {}),
                 "sector_enemy_counts": sector_enemy_counts,
                 "min_enemy_dist": min_enemy_dist,
@@ -1498,6 +1692,10 @@ class GameStateAdapter:
                 "sector_obs_costs": {},
                 "source": "unobserved",
                 "status": "unobserved"
+            },
+            "unknowns": [],
+            "objects_breakdown": {
+                "enemy": 0, "boss": 0, "projectile": 0, "hazard": 0, "exp": 0, "chest": 0, "rift": 0, "unknown": 0
             },
             "sector_dangers": {},
             "sector_enemy_counts": {s: 0 for s in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]},
