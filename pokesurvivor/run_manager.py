@@ -201,41 +201,44 @@ class RunManager:
             print("=" * 60)
 
         finally:
-            self.browser_ctrl.close()
+            if self.browser_ctrl:
+                self.browser_ctrl.release_all_keys()
+                self.browser_ctrl.stop()
 
     def _run_single_match(self, run_index: int) -> bool:
-        if not self.browser_ctrl.start_new_run():
+        def on_solo_ready():
+            try:
+                p_data = self.browser_ctrl.page.evaluate('''() => {
+                    let name = "Unknown";
+                    let move = "";
+                    let dex = null;
+                    if (window.G && window.G.player) {
+                        name = window.G.player.name || window.G.player.pokemon || name;
+                        dex = window.G.player.dex || null;
+                    }
+                    const nameEl = document.querySelector('[data-testid="selected-pokemon-name"], .pokemon-select-name, .character-name');
+                    if (nameEl && nameEl.innerText) name = nameEl.innerText.trim();
+                    return { name: name, move: move, dex: dex };
+                }''')
+                p_name = p_data.get("name", "Unknown")
+                p_move = p_data.get("move", "")
+                p_dex = p_data.get("dex")
+                if p_name and p_name != "Unknown":
+                    self.upgrade_policy.set_active_pokemon(p_name, starting_move=p_move, dex=p_dex)
+                    self.state_tracker.set_active_pokemon(p_name)
+                    self.perception.set_active_pokemon(p_name)
+                    print(f"[*] Đã nhận diện Pokemon xuất trận: {p_name} (Dex: {p_dex})")
+                else:
+                    self.upgrade_policy.set_active_pokemon("Unknown", starting_move="", dex=None)
+                    self.state_tracker.set_active_pokemon("Unknown")
+                    self.perception.set_active_pokemon("Unknown")
+            except Exception:
+                pass
+
+        print("[*] Đang vào trận Solo...")
+        if not self.browser_ctrl.start_solo_game(on_solo_screen_callback=on_solo_ready):
             print("[!] Không thể bắt đầu ván mới qua UI.")
             return False
-
-        # Read active Pokemon context from DOM or G
-        try:
-            p_data = self.browser_ctrl.page.evaluate('''() => {
-                let name = "Unknown";
-                let move = "";
-                let dex = null;
-                if (window.G && window.G.player) {
-                    name = window.G.player.name || window.G.player.pokemon || name;
-                    dex = window.G.player.dex || null;
-                }
-                const nameEl = document.querySelector('[data-testid="selected-pokemon-name"], .pokemon-select-name, .character-name');
-                if (nameEl && nameEl.innerText) name = nameEl.innerText.trim();
-                return { name: name, move: move, dex: dex };
-            }''')
-            p_name = p_data.get("name", "Unknown")
-            p_move = p_data.get("move", "")
-            p_dex = p_data.get("dex")
-            if p_name and p_name != "Unknown":
-                self.upgrade_policy.set_active_pokemon(p_name, starting_move=p_move, dex=p_dex)
-                self.state_tracker.set_active_pokemon(p_name)
-                self.perception.set_active_pokemon(p_name)
-                print(f"[*] Đã nhận diện Pokemon xuất trận: {p_name} (Dex: {p_dex})")
-            else:
-                self.upgrade_policy.set_active_pokemon("Unknown", starting_move="", dex=None)
-                self.state_tracker.set_active_pokemon("Unknown")
-                self.perception.set_active_pokemon("Unknown")
-        except Exception:
-            pass
 
         self.state_tracker.start_run(run_index)
         self.upgrade_policy.reset_match()

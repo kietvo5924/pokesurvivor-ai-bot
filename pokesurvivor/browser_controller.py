@@ -59,6 +59,10 @@ class BrowserController:
             except Exception:
                 pass
 
+    def close(self):
+        """Alias for stop()."""
+        self.stop()
+
     def navigate_home(self):
         if not self.page:
             return
@@ -116,6 +120,10 @@ class BrowserController:
         except Exception as e:
             print(f"[!] Lỗi khi vào trận Solo: {e}")
             return False
+
+    def start_new_run(self, on_solo_screen_callback=None) -> bool:
+        """Alias for start_solo_game()."""
+        return self.start_solo_game(on_solo_screen_callback=on_solo_screen_callback)
 
     def return_to_menu(self) -> bool:
         """Exits cleanly from any screen back to main menu (#menu)."""

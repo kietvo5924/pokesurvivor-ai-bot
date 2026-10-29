@@ -94,3 +94,4 @@ class TraceReplayer:
             "safe_outcome_rate_pct": round(safe_outcome_rate, 2),
             "net_hp_delta": round(total_hp_delta, 4)
         }
+
