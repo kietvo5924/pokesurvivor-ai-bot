@@ -1,11 +1,10 @@
 {
-  "total_runs": 176,
+  "total_runs": 177,
   "current_policy_version": "10.5",
   "best_policy_version": "10.5",
   "best_survival_time": 434.0,
   "best_level": 36,
   "recent_scores": [
-    1778.5,
     2120.5,
     715.0,
     779.0,
@@ -24,7 +23,8 @@
     1666.0,
     1555.5,
     1211.5,
-    928.5
+    928.5,
+    444.5
   ],
   "consecutive_drops": 0,
   "skill_ratings": {
@@ -32,13 +32,13 @@
     "ember": 6.759,
     "power": 8.321,
     "reflexes": 7.368,
-    "magnet": 7.49,
+    "magnet": 6.898,
     "revive": 12.356,
     "fire spin": 10.345,
     "sitrus berry": 6.409,
     "synthesis": 8.646,
     "tackle": 7.758,
-    "sprint": 13.664,
+    "sprint": 10.018,
     "flame wheel": 1.774,
     "harden": 9.069,
     "swords dance": 6.801,
@@ -49,12 +49,12 @@
     "armor": 8.498,
     "aqua ring": 16.573,
     "water gun": 9.948,
-    "focus": 9.725,
+    "focus": 8.526,
     "hydro pump": 11.406,
     "agility": 8.173,
     "water gun -> water gun+": 23.348,
     "disarming voice": 6.233,
-    "fairy wind": 6.536,
+    "fairy wind": 5.453,
     "hyper beam": 6.139,
     "hydro pump -> hydro pump+": 12.326,
     "disarming voice -> disarming voice+": 7.332,
@@ -71,7 +71,67 @@
     "body slam": 10.494,
     "draining kiss": 1.324
   },
-  "eval_block_runs": [],
+  "eval_block_runs": [
+    {
+      "run_id": 177,
+      "policy_version": "10.5",
+      "policy_hash": "f82d0008a0",
+      "pokemon": "Unknown",
+      "game_score": 49,
+      "game_score_source": "dom_results_kills",
+      "survival_time": 67.0,
+      "survival_time_source": "dom_results_time",
+      "max_level": 6,
+      "max_level_source": "state_tracker_verified",
+      "fitness_score": 444.5,
+      "fitness_score_source": "internal_composite_formula",
+      "duration": 67.0,
+      "damage_events": 0,
+      "swarm_damage_count": 0,
+      "wall_damage_count": 0,
+      "hazard_damage_count": 0,
+      "encircle_rate": 0.08362676056338028,
+      "last_stuck": false,
+      "end_reason": "timeout",
+      "upgrades": [
+        {
+          "modal_kind": "level-up",
+          "level": 2,
+          "name": "Magnet",
+          "tag": "Epic",
+          "time": 24.8
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 3,
+          "name": "Focus",
+          "tag": "Common",
+          "time": 32.4
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 4,
+          "name": "Sprint",
+          "tag": "Common",
+          "time": 37.7
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 5,
+          "name": "Sprint",
+          "tag": "Rare",
+          "time": 46.4
+        },
+        {
+          "modal_kind": "level-up",
+          "level": 6,
+          "name": "Fairy Wind",
+          "tag": "New · Fairy",
+          "time": 69.2
+        }
+      ]
+    }
+  ],
   "best_eval_avg": 331.0,
   "eval_block_history": [
     {

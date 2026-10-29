@@ -388,6 +388,7 @@ class RunManager:
                                 if reroll_avail:
                                     print(f"[{elapsed:.1f}s] 🔄 REROLL: Thẻ điểm quá thấp (<500), kích hoạt Reroll!")
                                     self.browser_ctrl.click_selector('[data-testid="reroll"]')
+                                    self.browser_ctrl.press_key("r")
                                     has_rerolled_this_choice = True
                                     time.sleep(0.4)
                                     continue
@@ -400,7 +401,7 @@ class RunManager:
                         print(f"[{elapsed:.1f}s] 🎯 CHỌN KỸ NĂNG: [{choice_name}] (Thẻ #{choice_idx + 1} | Lý do: {sel_reason})")
 
                         if not self.observe_only and not self.is_paused:
-                            self.browser_ctrl.select_upgrade_choice(choice_idx)
+                            self.browser_ctrl.select_upgrade_choice(best_card)
                             self.state_tracker.record_upgrade(
                                 best_card,
                                 modal_kind=modal_kind,

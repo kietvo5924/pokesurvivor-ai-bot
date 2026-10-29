@@ -365,12 +365,27 @@ class TestRound9PredictivePlanner(unittest.TestCase):
         self.assertEqual(tracker.upgrades_chosen[0]["name"], "Water Gun")
 
     def test_browser_controller_aliases(self):
-        """Verifies start_new_run and close aliases exist and are callable."""
+        """Verifies start_new_run, close, and select_upgrade_choice exist and operate correctly."""
         ctrl = BrowserController()
         self.assertTrue(hasattr(ctrl, "start_new_run"))
         self.assertTrue(hasattr(ctrl, "close"))
+        self.assertTrue(hasattr(ctrl, "select_upgrade_choice"))
         self.assertTrue(callable(ctrl.start_new_run))
         self.assertTrue(callable(ctrl.close))
+        self.assertTrue(callable(ctrl.select_upgrade_choice))
+
+        # Test select_upgrade_choice when page is None (safe return False)
+        self.assertFalse(ctrl.select_upgrade_choice(0))
+        self.assertFalse(ctrl.select_upgrade_choice('[data-testid="option-0"]'))
+        self.assertFalse(ctrl.select_upgrade_choice({"index": 0, "name": "Sniper"}))
+
+        # Test with mock page
+        mock_page = MagicMock()
+        mock_page.evaluate.return_value = False
+        ctrl.page = mock_page
+        res = ctrl.select_upgrade_choice({"index": 2, "name": "Sniper", "selector": '[data-testid="option-2"]'})
+        self.assertTrue(res)
+        mock_page.keyboard.press.assert_called_with("3")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import time
 import os
-from typing import Optional, Set
+from typing import Optional, Set, Union, Dict, Any
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 from pokesurvivor.config import GAME_URL, STORAGE_STATE_PATH, VIEWPORT_WIDTH, VIEWPORT_HEIGHT
 from pokesurvivor.game_state_adapter import CANVAS_HOOK_SCRIPT
@@ -139,6 +139,11 @@ class BrowserController:
                     exit_btn.click()
                     time.sleep(1.0)
                     break
+                res_exit = self.page.query_selector('[data-testid="results"] button, .ps-results button, [data-testid="results-close"]')
+                if res_exit and res_exit.is_visible():
+                    res_exit.click()
+                    time.sleep(1.0)
+                    break
                 time.sleep(0.4)
         except Exception:
             pass
@@ -212,4 +217,76 @@ class BrowserController:
         except Exception:
             pass
         return False
+
+    def select_upgrade_choice(self, choice: Union[int, str, Dict[str, Any]]) -> bool:
+        """
+        Selects an upgrade choice either by index (0-based or 1-based), selector string, or choice dict.
+        Attempts direct DOM element clicking and keyboard number shortcuts ('1', '2', '3', ...)
+        to ensure the choice modal is reliably dismissed.
+        """
+        if not self.page:
+            return False
+
+        idx = 0
+        selector = None
+        key = None
+        if isinstance(choice, int):
+            idx = choice
+            key = str(choice + 1)
+            selector = f'[data-testid="option-{choice}"]'
+        elif isinstance(choice, str):
+            selector = choice
+        elif isinstance(choice, dict):
+            idx = choice.get("index", 0)
+            key = str(choice.get("key", idx + 1))
+            selector = choice.get("selector") or f'[data-testid="option-{idx}"]'
+
+        success = False
+
+        # 1. Attempt clicking via selector
+        try:
+            if selector and self.click_selector(selector):
+                success = True
+        except Exception:
+            pass
+
+        # 2. Attempt clicking card element inside #choice by index
+        if not success:
+            try:
+                success = bool(self.page.evaluate('''(idx) => {
+                    const choiceEl = document.querySelector('#choice');
+                    if (!choiceEl) return false;
+                    const cards = choiceEl.querySelectorAll('.ps-card, [data-testid^="option-"], .cell, .option');
+                    if (cards && cards[idx]) {
+                        cards[idx].click();
+                        return true;
+                    }
+                    return false;
+                }''', idx))
+            except Exception:
+                pass
+
+        # 3. Always dispatch keyboard key ('1', '2', '3') as native game hotkey
+        try:
+            press_k = key if key else str(idx + 1)
+            self.press_key(press_k)
+            success = True
+        except Exception:
+            pass
+
+        # 4. Wait briefly for modal to dismiss
+        wait_start = time.time()
+        while time.time() - wait_start < 1.0:
+            try:
+                is_open = self.page.evaluate('''() => {
+                    const choiceEl = document.querySelector('#choice');
+                    return choiceEl ? !choiceEl.classList.contains('hidden') : false;
+                }''')
+                if not is_open:
+                    break
+            except Exception:
+                break
+            time.sleep(0.08)
+
+        return success
 

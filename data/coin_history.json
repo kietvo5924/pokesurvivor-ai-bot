@@ -1,6 +1,6 @@
 {
   "since": 1793192643.7488523,
-  "total_coins": 17239,
+  "total_coins": 17248,
   "runs": [
     {
       "timestamp": 1793192793.2289994,
@@ -513,6 +513,17 @@
       "kills": 230,
       "survival_time": 146.0,
       "level": 13,
+      "bosses": 0,
+      "policy_version": "10.5"
+    },
+    {
+      "timestamp": 1793255745.8396432,
+      "date": "2026-10-29 13:35:45",
+      "coins": 9,
+      "coins_observed": true,
+      "kills": 49,
+      "survival_time": 67.0,
+      "level": 6,
       "bosses": 0,
       "policy_version": "10.5"
     }
